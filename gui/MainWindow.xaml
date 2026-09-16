@@ -1,0 +1,322 @@
+<Window x:Class="CsdevGui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="csdev C2 控制台" Height="760" Width="1280"
+        MinHeight="600" MinWidth="1000"
+        Background="{StaticResource Bg}"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Microsoft YaHei UI">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="26"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================== 顶栏 ===================== -->
+        <Border Grid.Row="0" Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="False" Margin="20,0">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="csdev" Foreground="{StaticResource Accent}"
+                               FontFamily="Consolas" FontSize="17" FontWeight="Bold"/>
+                    <TextBlock Text=" C2" Foreground="{StaticResource Fg}"
+                               FontFamily="Consolas" FontSize="17"/>
+                    <TextBlock Text="console" Foreground="{StaticResource Dim}"
+                               FontSize="11" VerticalAlignment="Bottom"
+                               Margin="8,0,0,3"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right"
+                            VerticalAlignment="Center">
+                    <Border Background="{StaticResource Panel2}" CornerRadius="13"
+                            Padding="12,4" Margin="0,0,10,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="StatusDot" Width="7" Height="7"
+                                     Fill="{StaticResource Err}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="StatusText" Text="未连接"
+                                       Foreground="{StaticResource Fg}" FontSize="11"
+                                       Margin="7,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource Panel2}" CornerRadius="13"
+                            Padding="12,4" Margin="0,0,10,0">
+                        <TextBlock x:Name="SessionCount" Text="会话 0"
+                                   Foreground="{StaticResource Fg}" FontSize="11"/>
+                    </Border>
+                    <TextBlock x:Name="ClockText" Foreground="{StaticResource Dim}"
+                               FontFamily="Consolas" FontSize="11.5"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- ===================== 主体 ===================== -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- [ 左侧会话列表 ] -->
+            <Border Grid.Column="0" Background="{StaticResource Panel}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="会话列表"
+                               Foreground="{StaticResource Dim}" FontSize="10"
+                               FontWeight="SemiBold" Margin="18,15,0,10"/>
+                    <ListBox x:Name="SessionList" Grid.Row="1"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="{StaticResource Fg}"
+                             SelectionChanged="SessionList_SelectionChanged"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="10,0,10,8"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="b" Background="{StaticResource Panel2}"
+                                                    CornerRadius="8" Padding="12,10"
+                                                    BorderThickness="1"
+                                                    BorderBrush="Transparent">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="b" Property="Background"
+                                                            Value="{StaticResource Panel3}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="b" Property="BorderBrush"
+                                                            Value="{StaticResource Accent}"/>
+                                                    <Setter TargetName="b" Property="Background"
+                                                            Value="{StaticResource Panel3}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- [ 右侧工作区 ] -->
+            <TabControl x:Name="MainTabs" Grid.Column="1"
+                        Background="{StaticResource Bg}" BorderThickness="0"
+                        Margin="14,10,14,10">
+                <TabControl.Template>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Border Grid.Row="0" Background="{StaticResource Panel}"
+                                    BorderBrush="{StaticResource Line}"
+                                    BorderThickness="0,0,0,1" CornerRadius="8,8,0,0">
+                                <TabPanel IsItemsHost="True" Margin="10,0,0,0"/>
+                            </Border>
+                            <ContentPresenter Grid.Row="1" ContentSource="SelectedContent"/>
+                        </Grid>
+                    </ControlTemplate>
+                </TabControl.Template>
+
+                <!-- ========== 终端 ========== -->
+                <TabItem Header="终端">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Background="{StaticResource Panel2}"
+                                CornerRadius="0,0,8,8" Margin="0,0,0,8">
+                            <ScrollViewer x:Name="TermScroll" VerticalScrollBarVisibility="Auto"
+                                          Padding="16,14">
+                                <TextBlock x:Name="Terminal" TextWrapping="Wrap"
+                                           FontFamily="Consolas" FontSize="12.5"
+                                           Foreground="{StaticResource Fg}"/>
+                            </ScrollViewer>
+                        </Border>
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="CmdInput" Grid.Column="0"
+                                     Style="{StaticResource Field}"
+                                     FontFamily="Consolas"
+                                     KeyDown="CmdInput_KeyDown"/>
+                            <Button Grid.Column="1" Content="执行"
+                                    Style="{StaticResource Primary}"
+                                    Margin="8,0,0,0" Click="Send_Click"/>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <!-- ========== Payload 生成器 ========== -->
+                <TabItem Header="Payload 生成器">
+                    <Border Background="{StaticResource Panel2}" CornerRadius="0,0,8,8"
+                            Padding="26,22">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+
+                                <TextBlock Text="生成自研载荷"
+                                           Foreground="{StaticResource Fg}"
+                                           FontSize="16" FontWeight="Bold"/>
+                                <TextBlock Text="全部格式均为自研实现, 不含 Cobalt Strike 任何组件"
+                                           Foreground="{StaticResource Dim}"
+                                           FontSize="11.5" Margin="0,6,0,22"/>
+
+                                <!-- 格式 -->
+                                <TextBlock Text="载荷格式" Foreground="{StaticResource Dim}"
+                                           FontSize="11" Margin="0,0,0,6"/>
+                                <ComboBox x:Name="FmtBox" Style="{StaticResource Combo}"
+                                          SelectedIndex="0" Margin="0,0,0,4">
+                                    <ComboBoxItem Content="win-exe         Windows x64 可执行文件 (GUI)"/>
+                                    <ComboBoxItem Content="win-console     Windows x64 可执行文件 (控制台)"/>
+                                    <ComboBoxItem Content="win-svc         Windows x64 服务程序"/>
+                                    <ComboBoxItem Content="win-dll         Windows x64 DLL"/>
+                                    <ComboBoxItem Content="win-raw         Windows x64 raw shellcode"/>
+                                    <ComboBoxItem Content="win-ps1         PowerShell 加载器"/>
+                                    <ComboBoxItem Content="win-vba         VBA 宏"/>
+                                    <ComboBoxItem Content="win-vbs         VBScript"/>
+                                    <ComboBoxItem Content="linux-elf       Linux x64 ELF (静态)"/>
+                                    <ComboBoxItem Content="linux-elf-dyn   Linux x64 ELF (动态)"/>
+                                </ComboBox>
+
+                                <!-- 地址端口 -->
+                                <Grid Margin="0,16,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="14"/>
+                                        <ColumnDefinition Width="150"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="C2 地址" Foreground="{StaticResource Dim}"
+                                                   FontSize="11" Margin="0,0,0,6"/>
+                                        <TextBox x:Name="HostBox" Style="{StaticResource Field}"
+                                                 FontFamily="Consolas"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="端口" Foreground="{StaticResource Dim}"
+                                                   FontSize="11" Margin="0,0,0,6"/>
+                                        <TextBox x:Name="PortBox" Style="{StaticResource Field}"
+                                                 Text="8443" FontFamily="Consolas"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 选项 -->
+                                <Grid Margin="0,16,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="24"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="SslBox" Grid.Column="0"
+                                              Content="使用 HTTPS"
+                                              Foreground="{StaticResource Fg}"
+                                              VerticalAlignment="Center"
+                                              Margin="0,22,0,0"/>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="输出路径" Foreground="{StaticResource Dim}"
+                                                   FontSize="11" Margin="0,0,0,6"/>
+                                        <TextBox x:Name="OutBox" Style="{StaticResource Field}"
+                                                 FontFamily="Consolas"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 操作 -->
+                                <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                                    <Button Content="开始生成"
+                                            Style="{StaticResource Primary}"
+                                            Click="Generate_Click"/>
+                                    <Button Content="查看全部格式"
+                                            Style="{StaticResource Ghost}"
+                                            Margin="10,0,0,0"
+                                            Click="ListFormats_Click"/>
+                                </StackPanel>
+
+                                <!-- 输出 -->
+                                <Border Background="{StaticResource Bg}" CornerRadius="8"
+                                        Margin="0,22,0,0" Padding="16,14"
+                                        MinHeight="180">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <TextBlock x:Name="GenLog" TextWrapping="Wrap"
+                                                   FontFamily="Consolas" FontSize="12"
+                                                   Foreground="{StaticResource Fg}"
+                                                   Text="就绪"/>
+                                    </ScrollViewer>
+                                </Border>
+
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Border>
+                </TabItem>
+
+                <!-- ========== 服务端 ========== -->
+                <TabItem Header="服务端">
+                    <Border Background="{StaticResource Panel2}" CornerRadius="0,0,8,8"
+                            Padding="26,22">
+                        <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+                            <TextBlock Text="服务端连接"
+                                       Foreground="{StaticResource Fg}"
+                                       FontSize="16" FontWeight="Bold"/>
+                            <TextBlock Text="连接自研 Go 服务端 (csdev-server.exe)"
+                                       Foreground="{StaticResource Dim}"
+                                       FontSize="11.5" Margin="0,6,0,22"/>
+
+                            <TextBlock Text="服务端地址" Foreground="{StaticResource Dim}"
+                                       FontSize="11" Margin="0,0,0,6"/>
+                            <TextBox x:Name="ServerBox" Style="{StaticResource Field}"
+                                     Text="http://127.0.0.1:8443"
+                                     FontFamily="Consolas"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,22,0,0">
+                                <Button Content="连接"
+                                        Style="{StaticResource Primary}"
+                                        Click="Connect_Click"/>
+                                <Button Content="断开"
+                                        Style="{StaticResource Ghost}"
+                                        Margin="10,0,0,0"
+                                        Click="Disconnect_Click"/>
+                            </StackPanel>
+
+                            <Border Background="{StaticResource Bg}" CornerRadius="8"
+                                    Margin="0,22,0,0" Padding="16,14">
+                                <StackPanel>
+                                    <TextBlock Text="启动命令" Foreground="{StaticResource Dim}"
+                                               FontSize="11" Margin="0,0,0,8"/>
+                                    <TextBlock FontFamily="Consolas" FontSize="12"
+                                               Foreground="{StaticResource Accent}"
+                                               TextWrapping="Wrap"
+                                               Text="csdev-server.exe --port 8443 --host 0.0.0.0"/>
+                                    <TextBlock Text="启动后浏览器访问同地址可打开 Web 控制台"
+                                               Foreground="{StaticResource Dim}"
+                                               FontSize="11" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </TabItem>
+            </TabControl>
+        </Grid>
+
+        <!-- ===================== 状态栏 ===================== -->
+        <Border Grid.Row="2" Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="StatusBar" Text="就绪" Foreground="{StaticResource Dim}"
+                       FontSize="11" VerticalAlignment="Center" Margin="16,0"
+                       TextTrimming="CharacterEllipsis"/>
+        </Border>
+    </Grid>
+</Window>

