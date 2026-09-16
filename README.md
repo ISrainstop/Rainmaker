@@ -369,4 +369,3 @@ docs/                 协议规范
 | 文档 | 内容 |
 |---|---|
 | [`docs/protocol_v2.md`](docs/protocol_v2.md) | 协议 v2 规范：帧结构、加密、密钥交换、消息类型 |
-| [`HANDOVER.md`](HANDOVER.md) | 项目技术档案：架构决策、模块边界、已知限制与后续方向 |

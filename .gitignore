@@ -50,3 +50,10 @@ docs/stager_逆向分析.md
 cobaltstrike-client.jar
 TeamServerImage
 backup/
+
+# ============================ 内部档案 (只留本地, 不对外发布) ============================
+# HANDOVER.md 是面向"下一个接手的对话"的过程记录: 含逐轮改动、实测笔记、调试经过与
+# 对第三方产品的逆向分析。它对本项目有价值, 但属于**内部工作日志**, 不是对外文档 ——
+# 对外说明请以 README.md 与 docs/protocol_v2.md 为准。
+# 文件保留在本地工作区, 只是不入库。
+HANDOVER.md
