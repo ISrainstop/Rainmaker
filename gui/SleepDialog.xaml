@@ -1,0 +1,31 @@
+﻿<Window x:Class="CsdevGui.SleepDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="调整 sleep / jitter" Width="400" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{StaticResource Bg}"
+        FontFamily="Microsoft YaHei UI">
+    <StackPanel Margin="24,20,24,22">
+        <TextBlock Text="心跳节奏" Style="{StaticResource Title}"/>
+        <TextBlock x:Name="TargetText" Text="目标会话: -" Style="{StaticResource Sub}"/>
+        <TextBlock Text="通过 SET_SLEEP(0x2004) 任务下发, 服务端仅对 v2 会话生效"
+                   Style="{StaticResource Hint}" Margin="0,8,0,18"/>
+
+        <TextBlock Text="sleep (毫秒, 100 至 86400000)" Style="{StaticResource Label}"/>
+        <TextBox x:Name="SleepBox" Style="{StaticResource Field}" FontFamily="Consolas"
+                 Margin="0,0,0,14"/>
+
+        <TextBlock Text="jitter (百分比, 0 至 99)" Style="{StaticResource Label}"/>
+        <TextBox x:Name="JitterBox" Style="{StaticResource Field}" FontFamily="Consolas"/>
+
+        <TextBlock x:Name="ErrorText" Text="" Foreground="{StaticResource Err}"
+                   FontSize="11.5" Margin="0,12,0,0" TextWrapping="Wrap"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+            <Button Content="取消" Style="{StaticResource Ghost}" Click="Cancel_Click"/>
+            <Button Content="下发" Style="{StaticResource Primary}" Margin="10,0,0,0"
+                    Click="Ok_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

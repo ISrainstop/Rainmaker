@@ -1,0 +1,95 @@
+<Window x:Class="CsdevGui.LoginDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Rainmaker C2 · 登录" Width="460" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True"
+        Background="{StaticResource Bg}"
+        FontFamily="Microsoft YaHei UI">
+    <!--
+        启动门 / 重新登录两用。启动时没有 Owner, 所以 WindowStartupLocation 用
+        CenterScreen; 已连接后从主窗口调用时会由调用方改 CenterOwner。
+        垂直布局而不是横排按钮: 这是进入系统的唯一入口, 让主操作("登录")
+        占满宽度当视觉终点, "退出"降级为次级按钮, 避免误点。
+    -->
+    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource LineSoft}"
+            BorderThickness="1" CornerRadius="10" Margin="14">
+        <StackPanel Margin="30,26,30,24">
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                        Margin="0,0,0,22">
+                <Border Width="34" Height="34" CornerRadius="10"
+                        Background="{StaticResource Accent}" Margin="0,0,12,0">
+                    <Grid>
+                        <TextBlock Text="R" FontFamily="Segoe Script" FontSize="20" FontWeight="Bold"
+                                   Foreground="#FFFFFF" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" Margin="1,-2,0,0">
+                            <TextBlock.RenderTransform>
+                                <SkewTransform AngleX="-8"/>
+                            </TextBlock.RenderTransform>
+                        </TextBlock>
+                        <Path Stroke="#B3FFFFFF" StrokeThickness="1.8" StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Data="M 4.5,8 L 9,11.5 M 3.6,15 L 8,18.5 M 4.5,22 L 8.5,25"
+                              VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                    </Grid>
+                </Border>
+                <StackPanel VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <!-- 与主窗口同一套: 手写体 + 斜切 + 描边层 + 渐变 -->
+                        <Grid>
+                            <TextBlock Text="Rainmaker" FontFamily="Segoe Script" FontSize="24"
+                                       FontWeight="Bold" Foreground="#0C1E3E"
+                                       Margin="1.3,1.3,-1.3,-1.3">
+                                <TextBlock.RenderTransform>
+                                    <SkewTransform AngleX="-10"/>
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                            <TextBlock Text="Rainmaker" FontFamily="Segoe Script" FontSize="24"
+                                       FontWeight="Bold">
+                                <TextBlock.Foreground>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#60A5FA" Offset="0"/>
+                                        <GradientStop Color="#2563EB" Offset="0.45"/>
+                                        <GradientStop Color="#0E7490" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </TextBlock.Foreground>
+                                <TextBlock.Effect>
+                                    <DropShadowEffect Color="#2563EB" BlurRadius="16" ShadowDepth="0" Opacity="0.55"/>
+                                </TextBlock.Effect>
+                                <TextBlock.RenderTransform>
+                                    <SkewTransform AngleX="-10"/>
+                                </TextBlock.RenderTransform>
+                            </TextBlock>
+                        </Grid>
+                        <TextBlock Text="C2" Foreground="{StaticResource Fg}"
+                                   FontFamily="Consolas" FontSize="16" FontWeight="Bold"
+                                   Margin="8,0,0,2" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="SubTitle" Text="连接到控制台"
+                               Foreground="{StaticResource Dim}" FontSize="11.5" Margin="1,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+
+            <TextBlock Text="服务端地址" Style="{StaticResource Label}"/>
+            <TextBox x:Name="UrlBox" Style="{StaticResource Field}" FontFamily="Consolas"
+                     Margin="0,0,0,13"
+                     ToolTip="形如 127.0.0.1:8443 或 http://127.0.0.1:8443；可省略协议"/>
+
+            <TextBlock Text="用户名" Style="{StaticResource Label}"/>
+            <TextBox x:Name="UserBox" Style="{StaticResource Field}" FontFamily="Consolas"
+                     Margin="0,0,0,13"/>
+
+            <TextBlock Text="口令" Style="{StaticResource Label}"/>
+            <PasswordBox x:Name="PassBox" FontFamily="Consolas"/>
+
+            <TextBlock x:Name="ErrorText" Text="" Foreground="{StaticResource Err}"
+                       FontSize="11.5" Margin="0,11,0,0" TextWrapping="Wrap"/>
+
+            <Button x:Name="BtnOk" Content="登录" Style="{StaticResource Primary}"
+                    Padding="0,9" Margin="0,18,0,0" Click="Ok_Click"/>
+            <Button Content="退出" Style="{StaticResource Ghost}"
+                    Padding="0,7" Margin="0,8,0,0" Click="Cancel_Click"/>
+        </StackPanel>
+    </Border>
+</Window>

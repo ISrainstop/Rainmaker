@@ -7,7 +7,19 @@
     <Nullable>disable</Nullable>
     <AssemblyName>csdev-gui</AssemblyName>
     <RootNamespace>CsdevGui</RootNamespace>
+    <!-- 应用图标: 由 tools\gen_icon.ps1 生成 (7 个尺寸打包的 ICO)。
+         换图标时重跑那个脚本即可, 不要手工换成单尺寸 ico —— 任务栏与开始菜单
+         会按不同 DPI 取不同尺寸, 单尺寸会被拉伸糊掉。 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- exe 的文件属性元数据: 任务栏悬停提示与"属性 → 详细信息"读的是这几个,
+         不改的话会显示成程序集名 csdev-gui。 -->
+    <AssemblyTitle>Rainmaker C2</AssemblyTitle>
+    <Product>Rainmaker C2</Product>
+    <Description>Rainmaker C2 控制台</Description>
+    <Company>Rainmaker</Company>
+    <Version>4.9.3</Version>
+    <FileVersion>4.9.3.0</FileVersion>
     <LangVersion>latest</LangVersion>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>

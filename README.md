@@ -1,193 +1,328 @@
-# CS 二开免杀套件 (cs_dev)
+# Rainmaker C2
 
-Cobalt Strike 4.7 二次开发套件 —— 自研免杀模块、可选择的免杀档案、跨平台载荷支持。
+自研命令与控制框架。植入体、服务端、客户端三层全部自行实现，不依赖任何第三方 C2 平台。
+
+协议为自定义的 v2 二进制协议（`CS2K`），全程 RSA-2048 密钥交换 + AES-256-CBC 加密 +
+HMAC-SHA256 完整性校验；承载层支持 HTTP / HTTPS / TCP / SMB / DNS / External C2 六种，
+可在运行期增删。
 
 ---
 
-## 一、项目状态
+## 目录
 
-**当前成果：多引擎检测 0 检出**（最终版本 `stager.exe` 20480 字节）
+- [核心特性](#核心特性)
+- [系统组成](#系统组成)
+- [通信协议](#通信协议)
+- [承载层](#承载层)
+- [客户端功能](#客户端功能)
+- [载荷格式](#载荷格式)
+- [快速开始](#快速开始)
+- [构建](#构建)
+- [仓库结构](#仓库结构)
+- [系统要求](#系统要求)
+- [安全说明](#安全说明)
 
-| 检测引擎 | 初始状态 | 当前状态 |
+---
+
+## 核心特性
+
+**全自研三层架构。** 植入体是 C 代码，服务端是零第三方依赖的 Go 程序（单个静态二进制），
+客户端是 .NET 6 WPF 桌面程序。三者共用同一套协议实现契约（见 `docs/protocol_v2.md`），
+不使用任何外部 C2 框架的组件、协议或资源。
+
+**端到端加密。** 植入体与服务端之间以 RSA-2048 交换会话密钥（PKCS#1 v1.5 封装），
+之后全部流量走 AES-256-CBC，每条消息附带 HMAC-SHA256。服务端持有私钥，
+公钥在构建期编入植入体，密钥轮换后需重新生成载荷。
+
+**六种承载层，统一协议。** HTTP、HTTPS、TCP、SMB 命名管道、DNS、External C2 共用同一套
+分帧与加密逻辑，因此会话行为在各承载下完全一致。承载层可在服务端运行期通过接口增删，
+无需重启。
+
+**多操作员与访问控制。** 服务端内置操作员库，口令以加盐哈希存储（明文不落盘）。
+登录换取 Bearer 令牌，令牌携带角色（admin / operator），账号管理接口仅对 admin 开放。
+
+**Aggressor 脚本引擎。** 内置 Sleep 语言实用子集的解释器，可直接加载 `.cna` 脚本，
+支持脚本资源加载、自定义菜单项、命令别名与 C2 桥接函数。
+
+**完整的过程管理能力。** 文件浏览、进程列举、凭据管理、截屏、键盘记录、SAM hive 离线
+解析、SOCKS5 代理、反向端口转发、作业调度、目标库，以及 JSON / HTML / CSV 三种格式的
+活动报告导出。
+
+---
+
+## 系统组成
+
+| 层 | 语言 / 运行时 | 产物 |
 |---|---|---|
-| Kaspersky | `HEUR:Trojan.Win32.CobaltStrike.gen` | **已消除** |
-| GDATA | `Dump:Generic.Beacon.Marte.B.18C12973` | **已消除** |
-| OneAV | `Win.Suspicious.ml[pua]` | **已消除** |
-| Baidu-China | `Win32.Trojan.WisdomEyes.151026.9950.9998` | **已消除** |
-| ESET | `a variant of Win64/CobaltStrike.Artifact` | **已消除** |
+| 植入体 | C（Windows x64 / Linux x64） | 独立可执行文件、DLL、shellcode、脚本加载器 |
+| 服务端 | Go 1.23，纯标准库 | 单一静态二进制，无运行时依赖 |
+| 客户端 | C# / .NET 6 / WPF | Windows 桌面程序，15 个功能面板 |
+
+三层之间的边界是协议，不是共享代码。服务端可独立部署于 Linux，客户端在 Windows 侧连接。
 
 ---
 
-## 二、自研组件清单
+## 通信协议
 
-| 组件 | 文件 | 说明 |
-|---|---|---|
-| 载体 PE 壳 | `kits/artifact/artifact64.c` | 6 变体 (exe/svc/dll × small/big)，体积 0.92~1.48 倍原版 |
-| Payload 加载器 | `kits/packer/csdev_loader.c` | RC4 + 节区内嵌配置 |
-| **自研 Stager** | `kits/packer/csdev_stager.c` | **WinHTTP + 独立线程执行 stage** |
-| sleep mask | `kits/sleepmask/sleepmask.c` | RC4 + 变步长 XOR |
-| injector | `kits/injector/injector.c` | 硬件断点 patchless + RecycledGate |
-| UDRL | `kits/udrl/udrl.c` | 自定义反射加载器 |
-| evasion 头文件 | `kits/evasion/hwbp.h`, `evasion.h` | 反调试/反沙箱/调用栈伪造 |
-| Linux beacon | `linux/beacon.c`, `stager.c` | 独立 Linux 载荷 + 配套 C2 服务端 |
-| 主插件 | `aggressor/cs_dev.cna` | 19 个 sub，4 个菜单入口 |
-| C2 Profile | `profiles/csdev.profile` | 规避默认 profile 特征 |
+协议 v2 的完整规范见 [`docs/protocol_v2.md`](docs/protocol_v2.md)，该文件是 C 植入体、
+Go 服务端、WPF 客户端三方共同遵循的实现契约。
 
----
-
-## 三、逆向发现（全部实测验证）
-
-### 3.1 CS stager 机制
+**帧结构。** 每帧固定 20 字节头部，后接变长消息体：
 
 ```
-模板文件    : resources/httpsstager64.bin (909 字节)
-配置偏移    : port=274  flags=314  exitOffset=811  skipOffset=898
-网络栈      : WinINet
-X/Y 占位符  : 0x58='pop rax' / 0x59='pop rcx' —— 填充指令, 非数据缓冲区
-解密环节    : 无 (stage 由 stage 自身处理)
+偏移  长度  字段
+0     4     魔数 0x4353324B ("CS2K")
+4     4     会话 ID
+8     4     序号（单调递增）
+12    4     标志位
+16    4     消息体长度
+20    N     消息体（加密）
 ```
 
-### 3.2 stage 下载的四个关键机制
+单帧消息体上限 4 MB。超过 512 KB 的数据按分片传输，接收端按序号重组。
 
-| # | 机制 | 实测证据 |
-|---|---|---|
-| 1 | **URI 必须满足 checksum8** | `/aaa`(ck8=35) → 404 |
-| 2 | **checksum8 数值决定 stage 架构** | **92 → x86 (MZRE 头, 223302 字节)<br>93 → x64 (纯 shellcode, 277063 字节)** |
-| 3 | **必须带特定请求头** | 缺 `Accept`/`Connection`/`Cache-Control` → 404 |
-| 4 | **stage 必须在独立线程执行** | 主线程执行可上线但**命令通道不通** |
+**密钥交换。** 植入体首次通信时生成随机 AES-256 会话密钥，用编译期内置的服务端公钥
+（RSA-2048）加密后发送；服务端用私钥解出会话密钥，之后双向流量均使用该密钥。
 
-checksum8 算法：去掉斜杠后各字符 ASCII 之和，对 256 取余。
+**认证与完整性。** AES-256-CBC 加密，IV 随帧随机；HMAC-SHA256 覆盖帧头与密文，
+防止篡改与重放。
 
-### 3.3 stage 自解密 stub
-
-```
-0x00: FC              cld
-0x01: E8 0A 00 00 00  call 0x10
-0x10: EB 27           jmp  0x39
-0x39: E8 D4 FF FF FF  call 0x12
-0x12: 5B              pop  rbx        ; rbx = 0x3E (自身定位)
-0x13: 8B 2B           mov  ebp,[rbx]  ; XOR 密钥
-...                   (链式 XOR 解密循环)
-0x37: FF E5           jmp  rbp        ; 跳入明文
-```
-
-还原工具：`tools/unpack_stage.py`
+**协议 v1（兼容层）。** 早期版本使用 RC4 流密码与 4 字节魔数 `KBRK`，服务端保留该通道
+以兼容既有载荷。新部署建议直接使用 v2。
 
 ---
 
-## 四、免杀优化链（按时间顺序）
+## 承载层
 
-| # | 消除的特征 | 手段 |
+| 承载 | 启动参数 | 说明 |
 |---|---|---|
-| 1 | CS stager 909 字节模板代码 | 自研 WinHTTP stager 完全替代 |
-| 2 | 尾部附加数据 (overlay) | 配置迁入 `.data` 节区内嵌 |
-| 3 | 自读取行为链 | 移除 `GetModuleFileNameA`/`CreateFileA`/`ReadFile`/`GetFileSize` |
-| 4 | RC4 S-box 特征 | 改为异或流 |
-| 5 | 反调试特征对 | 移除 `IsDebuggerPresent`/`CheckRemoteDebuggerPresent` |
-| 6 | **PE 内预留区形态** | **`.data` 内 2048 字节零区改为伪随机初始化** |
-| 7 | MinGW 节名指纹 | 6 个节名偏离 CS 原版 |
+| HTTP | 默认 | `POST /submit` 上行，`GET /task` 下行 |
+| HTTPS | `-tls` | 自签名证书首次启动时自动生成 |
+| TCP | `--tcp <addr>` | 裸 TCP，外层以 4 字节大端长度分帧 |
+| SMB | `--smb <pipe>` | Windows 命名管道；仅 Windows 服务端支持 |
+| DNS | `--dns <addr>` | TXT 查询承载，单帧上限 256 KB，适合小数据量场景 |
+| External C2 | `--extc2 <addr>` | 供第三方通道对接的标准转发接口 |
 
-### 关键教训
-
-第 6 项是转折点，但它的发现过程值得记录：
-
-- 修 Baidu 时我把配置从 overlay 搬进 `.data` 预留区
-- **Baidu 消失了，但 ESET 出现了** —— 是我自己的改动引入了新检测
-- 原因是**全零预留区的形态与 CS artifact 机制相同**（CS 预留 1024 个 `'A'`，我预留 2048 字节零区）
-- 改为伪随机初始化后 ESET 立即失效
-
-**方法论**：检测结果的时间序列本身就是定位依据。连续往前改而不回头对照"哪次改动引入了新检测"，会导致多轮空转。
+承载层可在运行期通过 `POST /api/listener/add` 与 `/api/listener/del` 增删，会话不受影响。
 
 ---
 
-## 五、关键约束（无法规避）
+## 客户端功能
 
-| 约束 | 原因 |
+单窗口 15 个面板：
+
+| 面板 | 用途 |
 |---|---|
-| **RWX 权限必须保留** | stage 是自解密 shellcode，运行期需写自身；实测改 RX 立即 `0xC0000005` |
-| **WinHTTP 四件套无法移除** | 下载 stage 的功能本体 |
-| **`VirtualAlloc`+`VirtualProtect`+`CreateThread` 无法移除** | 执行 stage 的功能本体 |
-| **1024 个 `'A'` 锚点无法消除** | 若走 CS artifact 路径，CS 用 `indexOf("A"*1024)` 硬编码定位；唯一出路是不用该路径 |
-| **32 位模板未改造** | 本机无 i686 工具链 |
+| 会话 | 会话列表、终端、命令下发、右键菜单、sleep / jitter 调整 |
+| 监听器 | 承载层实例的查看与增删 |
+| 凭据 | 采集到的凭据集中管理 |
+| 下载 | 从目标机取回的文件 |
+| 截屏 | 屏幕截图流 |
+| 键盘记录 | 键盘记录流 |
+| 事件日志 | 服务端操作与状态事件 |
+| 载荷生成 | 按格式生成植入体，可配置地址、端口、URI、sleep、jitter、启动口令等 |
+| 文件 | 远程文件浏览器，支持上传、下载、目录导航与本地缓存 |
+| 进程 | 进程列举与结束 |
+| 服务端 | 操作员账号管理（需 admin 角色） |
+| 目标库 | 目标主机信息维护 |
+| 代理枢纽 | SOCKS5 代理与反向端口转发的建立与状态查看 |
+| 脚本 | Aggressor 脚本加载、控制台与状态 |
+| 作业 | 长任务的进度与结果 |
+
+客户端启动时先显示登录界面（服务端地址、用户名、口令），认证通过后才进入主界面。
 
 ---
 
-## 六、使用方法
+## 载荷格式
 
-### 6.1 部署插件
+共 19 种，覆盖原生可执行文件、shellcode 与脚本加载器。
 
-把 `plugin/cs_dev/` 整个目录放到 CS 根目录的 `plugin/` 下，重启客户端自动加载。
+**协议 v2（推荐）**
 
-### 6.2 生成自研 stager
+| ID | 说明 |
+|---|---|
+| `win2-exe` | Windows x64 可执行文件（GUI 子系统） |
+| `win2-console` | Windows x64 可执行文件（控制台子系统） |
+| `win2-svc` | Windows x64 服务程序 |
+| `win2-dll` | Windows x64 动态链接库 |
+| `win2-raw` | Windows x64 shellcode |
+| `win2-tcp` | Windows x64 可执行文件（TCP 直连承载） |
+| `win2-ps1` | PowerShell 加载器 |
+| `win2-vba` | VBA 宏 |
+| `win2-vbs` | VBScript |
+| `win2-cs` | C# 加载器 |
+| `linux2-elf` | Linux x64 ELF（静态链接） |
+| `linux2-dyn` | Linux x64 ELF（动态链接） |
 
-```
-菜单: Payloads -> 免杀档案 (cs_dev) -> 自研 Stager 生成 (无CS模板)
-参数: C2 地址 / 端口 / URI / 协议
-URI  : x64 必须用 checksum8=93 (如 /aab9 /aac8 /aad7)
-       x86 用 checksum8=92 (如 /aaa9 /aab8)
-```
+**协议 v1（兼容）**
 
-生成后拷到目标机执行即可回连，命令通道正常。
+| ID | 说明 |
+|---|---|
+| `win-exe` / `win-console` / `win-dll` / `win-raw` / `win-ps1` | Windows 系列 |
+| `linux-elf` / `linux-elf-dyn` | Linux x64 ELF（裸 TCP 承载） |
 
-### 6.3 切换免杀档案
+生成载荷时可选启用启动口令门控：服务端把随机盐与口令摘要编入二进制，植入体启动时校验，
+明文口令不写入产物。同一口令在不同次构建中产生不同摘要。
 
-```
-菜单: 免杀档案 -> 基础/进阶/对抗
-说明: 切换后需重启客户端 (Windows kits 在启动时从 jar 加载)
-档案: basic (2384B) / advanced (5264B) / stealth (5520B)
-```
+---
 
-### 6.4 CrossC2 (Linux 载荷进 CS 会话)
+## 快速开始
 
-```
-菜单: Linux 载荷 -> CrossC2 生成
-前提: 需先连过 teamserver 生成 .cobaltstrike.beacon_keys
-注意: listener 必须是 HTTPS 类型, HTTP listener 不会有会话
-```
+### 1. 启动服务端
 
-### 6.5 加载自定义 Profile
-
-**Profile 由 teamserver 加载，客户端无法加载**（客户端 `Help -> Malleable C2` 只是只读查看）。
+从 [Releases](https://github.com/ISrainstop/Rainmaker/releases) 下载对应平台的服务端，
+或自行构建（见下节）。
 
 ```bash
-# 服务器上
-./teamserver <绑定IP> <密码> /path/to/csdev.profile
+# Linux / macOS
+chmod +x csdev-server-linux-amd64
+./csdev-server-linux-amd64 -port 8443
+
+# Windows
+csdev-server.exe -port 8443
 ```
 
-注意：**已有 listener 不会自动更新**，需删掉重建。
+首次启动会自动生成 RSA 密钥对、操作员库与随机的默认管理员口令。**该口令只打印一次**，
+请立即保存。
+
+服务端启动后可访问 `http://127.0.0.1:8443/` 使用内置 Web 界面。
+
+> 服务端的访问控制默认开启。`-auth=off` 会完全旁路鉴权，仅用于隔离测试环境。
+
+### 2. 连接客户端
+
+运行 `csdev-gui.exe`，在登录界面填入服务端地址、用户名与口令。
+
+### 3. 生成载荷
+
+在客户端「载荷生成」面板选择格式，填写回连地址与端口，点击生成。
+产物默认输出到 `build/payload/`。
+
+### 4. 建立会话
+
+在目标机执行生成的可执行文件，会话将出现在「会话」面板，选中后即可在下方终端下发命令。
 
 ---
 
-## 七、工具说明
+## 构建
 
-| 工具 | 用途 |
+### 服务端（全平台）
+
+服务端是零第三方依赖的 Go 程序，交叉编译不需要目标平台工具链。
+
+```bash
+pwsh -File tools/build_server.ps1 -Verify
+```
+
+一次产出五个平台的静态二进制，落在 `build/`：
+
+```
+csdev-server.exe                Windows  amd64
+csdev-server-linux-amd64        Linux    amd64
+csdev-server-linux-arm64        Linux    arm64
+csdev-server-darwin-amd64       macOS    amd64
+csdev-server-darwin-arm64       macOS    arm64
+```
+
+也可直接用 Go 命令：
+
+```bash
+cd go
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o csdev-server-linux-amd64 .
+```
+
+### 客户端
+
+需要 .NET 6 SDK 与 Windows：
+
+```bash
+cd gui
+dotnet build -c Release
+```
+
+自测（离线，不连接服务端）：
+
+```bash
+csdev-gui.exe --selftest
+```
+
+### 植入体
+
+生成植入体需要目标格式对应的 C 工具链：
+
+| 目标 | 工具链 |
 |---|---|
-| `tools/build_stager.ps1` | 生成自研 stager（含改节名、节区内嵌配置） |
-| `tools/pack_payload.ps1` | 把 raw shellcode 打包成 EXE |
-| `tools/build_library.ps1` | 预编译全部免杀档案变体 |
-| `tools/apply_profile.ps1` | 从变体库快速切换档案 |
-| `tools/deploy.ps1` | 编译并部署到 jar |
-| `tools/SleeveCrypt.java` | CS sleeve 资源加解密 |
-| `tools/ParseBeaconKeys.java` | 解析 beacon_keys 提取 RSA 公钥 |
-| `tools/unpack_stage.py` | 还原 stage 自解密 stub |
-| `tools/ValidateProfile.java` | Profile 语法校验 |
-| `tools/gen_linux.ps1` | 生成独立 Linux 载荷 |
+| Windows x64 | MinGW-w64（`gcc` 需在 PATH 中，或用 `-MinGw` 指定目录） |
+| Linux x64 | `gcc` |
+
+生成流程由客户端「载荷生成」面板驱动，服务端调用 `tools/gen_payload2.ps1` 完成编译与打包。
 
 ---
 
-## 八、工程注意事项
+## 仓库结构
 
-1. **所有 `.ps1` 必须带 UTF-8 BOM** —— PowerShell 5.1 用 GBK 读取无 BOM 文件会导致中文乱码进而语法错误
-2. **CNA 的 `exec()` 是异步的** —— 脚本报错不会回到 CS 控制台
-3. **菜单项不能有颜色码** —— `\cXX` 只在 `println` 中生效
-4. **`show_message` 单参数**
-5. **CNA 路径用正斜杠** —— 反斜杠会被当转义符
+```
+go/                   服务端（Go）
+  proto/              协议实现：分帧、加密、密钥交换
+  profile/            Malleable C2 profile 解析
+  testdata/           测试样本
+
+gui/                  客户端（C# / .NET 6 / WPF）
+  App.xaml            主题与控件样式（浅色主题，语义化设计令牌）
+  MainWindow.xaml     主窗口与 15 个面板
+  SelfTest.cs         离线自测套件
+
+kits/                 植入体与支撑模块（C）
+  beacon/             Windows 植入体核心
+  crypto/             AES / SHA-256 / RSA
+  proto/              协议分帧
+  packer/             加载器、stager、CLR 宿主
+  artifact/           PE 载体模板
+  evasion/            反调试与反沙箱
+  injector/           注入器
+  sleepmask/          睡眠期内存伪装
+  udrl/               反射加载器
+
+linux/                Linux 植入体（C）与配套服务端
+c2/                   早期 Python 服务端实现
+aggressor/            Aggressor 插件
+profiles/             Malleable C2 profile
+tools/                构建与生成脚本
+docs/                 协议规范
+```
 
 ---
 
-## 九、未完成项
+## 系统要求
 
-- 32 位载体（6 个模板）未改造，缺 i686 工具链
-- 自研 stager 只做过功能验证，无长期稳定性测试
-- Profile 未在真实 teamserver 上验证加载效果
-- 换 MSVC 工具链重编的方案未实施（可能对更深层的编译器指纹检测有效）
+| 组件 | 要求 |
+|---|---|
+| 服务端 | 无需运行时。可运行于 Windows 10+ / Linux（amd64、arm64）/ macOS（amd64、arm64） |
+| 客户端 | Windows 10 或 11，需 .NET 6 桌面运行时 |
+| 植入体（Windows 目标） | 构建需 MinGW-w64；产物运行于 Windows x64 |
+| 植入体（Linux 目标） | 构建需 `gcc`；产物运行于 Linux x64（静态链接版本无 glibc 版本要求） |
+
+**平台差异。** SMB 承载基于 Windows 命名管道，仅 Windows 服务端提供；在 Linux / macOS 上
+选择该承载会返回明确的平台限制提示，不影响其他五种承载与会话功能。
+
+---
+
+## 安全说明
+
+本项目是安全测试工具，**仅供已获得明确授权的渗透测试、红队演练与安全研究使用**。
+
+- 未经授权对他人系统使用本工具可能违反法律。
+- 使用者有责任确认测试范围与授权状态。
+- 服务端默认开启访问控制，请勿以 `-auth=off` 暴露于非受信网络。
+- 敏感数据（RSA 私钥、操作员库、采集结果）默认写入 `data/`，已被 `.gitignore` 排除，
+  请勿随仓库分发。
+- 密钥轮换（重新生成 `data/csdev.key`）后，全部既有载荷失效，需重新生成。
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/protocol_v2.md`](docs/protocol_v2.md) | 协议 v2 规范：帧结构、加密、密钥交换、消息类型 |
+| [`HANDOVER.md`](HANDOVER.md) | 项目技术档案：架构决策、模块边界、已知限制与后续方向 |

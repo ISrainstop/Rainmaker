@@ -1,4 +1,4 @@
-﻿# cs_dev :: gen_payload.ps1  --  自研 Payload 生成器 (多格式)
+# cs_dev :: gen_payload.ps1  --  自研 Payload 生成器 (多格式)
 # ==========================================================================
 # 对标 CS 的 payload 生成器, 支持:
 #
@@ -116,10 +116,21 @@ if ($Format -like 'win-*' -and $Format -ne 'win-ps1' -and $Format -ne 'win-vba' 
     if ($Format -eq 'win-raw') {
         $rawPath = [System.IO.Path]::ChangeExtension($OutFile, '.bin')
         $objcopy = Join-Path $MinGw 'objcopy.exe'
-        & $objcopy -O binary --only-section=.text $OutFile $rawPath 2>&1 | Out-Null
-        if (Test-Path $rawPath) {
-            Remove-Item $OutFile -Force
-            $OutFile = $rawPath
+        if (-not (Test-Path $objcopy)) { throw "objcopy 不存在: $objcopy" }
+        # 若产物本身就叫 .bin, 输入与输出会是同一个文件, objcopy 直接拒绝执行,
+        # 外面只看到一句没头没脑的 "生成失败: <路径>"。与 v2 生成器一致: 先挪到临时 PE 再提取。
+        if ($rawPath -eq $OutFile) {
+            $tmpPe = Join-Path (Split-Path -Parent $OutFile) ('_raw_' + [System.IO.Path]::GetFileNameWithoutExtension($OutFile) + '.exe')
+            Move-Item -Force $OutFile $tmpPe
+            & $objcopy -O binary --only-section=.text $tmpPe $rawPath 2>&1 | Out-Null
+            Remove-Item $tmpPe -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path $rawPath)) { throw "objcopy 提取 .text 失败: $rawPath" }
+        } else {
+            & $objcopy -O binary --only-section=.text $OutFile $rawPath 2>&1 | Out-Null
+            if (Test-Path $rawPath) {
+                Remove-Item $OutFile -Force
+                $OutFile = $rawPath
+            }
         }
     }
 }

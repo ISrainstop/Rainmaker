@@ -1,0 +1,41 @@
+# csdev :: obf_names.txt
+# ==========================================================================
+# 需要混淆、但不来自 bof_api.c API_ENT(...) 宏的名字, 每行一个。
+# gen_obf_names.ps1 会把它们连同 API_ENT 名单一起生成到 cs_obf_names.h。
+#
+# 收录标准: 出现在二进制里会让"内存加载器/注入器/横向移动"家族判定变容易的明文。
+#   - 注入三件套 + 提权/令牌相关 (BOF API 之外的直接调用)
+#   - 运行期解析用的模块名
+#   - 我们自己的标识串
+# 不要放: 必须整体作为命令行/URL 出现的串(混淆的是片段, 拼装仍在别处)
+# ==========================================================================
+
+# --- kernel32 注入/内存 ---
+VirtualAllocEx
+WriteProcessMemory
+CreateRemoteThread
+VirtualProtect
+CreateProcessA
+CreateToolhelp32Snapshot
+OpenProcessToken
+OpenProcess
+
+# --- BOF 表前 4 项(它们是 kernel32 导出, 但连在一起也是特征) ---
+LoadLibraryA
+FreeLibrary
+GetProcAddress
+GetModuleHandleA
+
+# --- 运行期解析用到的模块名 ---
+kernel32.dll
+ntdll
+
+# --- 横向移动 / 服务 ---
+OpenSCManagerA
+CreateServiceA
+StartServiceA
+DeleteService
+LogonUserA
+
+# --- 自有标识 ---
+CsdevStub

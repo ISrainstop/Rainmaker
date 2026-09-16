@@ -1,5 +1,6 @@
-# 编译产物
+# ============================ 编译产物 ============================
 *.exe
+!tools/**/*.c
 *.dll
 *.o
 *.obj
@@ -13,9 +14,39 @@ library/
 *.enc
 *.elf
 *.bin
+*.so
+*.dylib
 
-# 敏感
+# 编译中间残留 (gcc/go 偶尔留下)
+*~
+*.tmp
+*.orig
+*.rej
+
+# ============================ 敏感数据 ============================
+# 服务端密钥对 / 操作员库 / 运行数据 —— 命中即泄漏, 从数据结构上就不入库
+data/
 *.beacon_keys
+
+# 运行期产物
+downloads/
+screenshots/
+*.log
+
+# hashdump 的真实 hive 样本 (含本机账户哈希; 用 reg save 本地生成)
+go/testdata/hashdump/*.hiv
+
+# ============================ 第三方素材 (版权归原作者, 不进公开仓库) ============================
+# Aggressor 脚本与工具集 (Ladon / LSTAR / OLa / PrivKit / SharpHound / TaoWu / XieGongZi 等)
+scripts/
+
+# Cobalt Strike 反编译产物与分析笔记 —— 属于商业软件的逆向材料, 不随本项目分发
+docs/_cs47_extract/
+docs/CS47_功能全景.md
+docs/差距盘点_本轮.md
+docs/stager_逆向分析.md
+
+# Cobalt Strike 本体与客户端
 cobaltstrike-client.jar
 TeamServerImage
 backup/
