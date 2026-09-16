@@ -17,6 +17,12 @@ library/
 *.so
 *.dylib
 
+# 例外: 载荷模板必须入库。
+# 它们是"生成端零工具链"这套方案的基础 —— 服务端 go:embed 这些文件, 没有它们
+# go build 出来的服务端就无法生成任何载荷。改动植入体 C 代码后要重跑
+# tools/build_templates.ps1 并一起提交。
+!go/templates/*.bin
+
 # 编译中间残留 (gcc/go 偶尔留下)
 *~
 *.tmp

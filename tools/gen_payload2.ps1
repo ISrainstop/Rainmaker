@@ -497,7 +497,9 @@ if ($IsNative) {
                   '-o',$tmpExe,$RawWrapper) + $SrcFiles + @('-lwinhttp','-ladvapi32')
             $rc = Invoke-Gcc $a 'gcc'
             if ($rc -ne 0 -or -not (Test-Path $tmpExe)) { throw "编译失败 (gcc exit=$rc)" }
-            $log = Invoke-Native $objcopy @('-O','binary','--only-section=.text',$tmpExe,$OutFile)
+            # 提取 .text **与 .c2cfg**: 运行时配置槽放在独立的 .c2cfg 节里,
+            # 只提 .text 会把它丢掉, 那样生成的 raw 就没法在生成端写配置了。
+            $log = Invoke-Native $objcopy @('-O','binary','--only-section=.text','--only-section=.c2cfg',$tmpExe,$OutFile)
             if ($log) { SayQ ("    [objcopy] {0}" -f ($log -join ' ')) 'DarkGray' }
             Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
             if (-not (Test-Path $OutFile)) { throw "objcopy 提取 .text 失败" }
