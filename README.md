@@ -168,10 +168,23 @@ Go 服务端、WPF 客户端三方共同遵循的实现契约。
 
 ## 快速开始
 
-### 1. 启动服务端
+### 1. 获取程序
 
-从 [Releases](https://github.com/ISrainstop/Rainmaker/releases) 下载对应平台的服务端，
-或自行构建（见下节）。
+从 [Releases](https://github.com/ISrainstop/Rainmaker/releases) 下载，或自行构建（见下节）。
+
+| 文件 | 说明 |
+|---|---|
+| `csdev-server.exe` | 服务端，Windows x64 |
+| `csdev-server-linux-amd64` | 服务端，Linux x64 |
+| `csdev-server-linux-arm64` | 服务端，Linux arm64 |
+| `csdev-server-darwin-amd64` | 服务端，macOS Intel |
+| `csdev-server-darwin-arm64` | 服务端，macOS Apple Silicon |
+| `csdev-gui-win-x64.zip` | 客户端，Windows x64 自包含版本 |
+
+服务端为静态链接的单一可执行文件，无需安装运行时。客户端压缩包解压后直接运行
+`csdev-gui.exe`，同样无需安装 .NET 运行时。
+
+### 2. 启动服务端
 
 ```bash
 # Linux / macOS
@@ -189,16 +202,17 @@ csdev-server.exe -port 8443
 
 > 服务端的访问控制默认开启。`-auth=off` 会完全旁路鉴权，仅用于隔离测试环境。
 
-### 2. 连接客户端
+### 3. 连接客户端
 
-运行 `csdev-gui.exe`，在登录界面填入服务端地址、用户名与口令。
+解压 `csdev-gui-win-x64.zip`，运行其中的 `csdev-gui.exe`，在登录界面填入服务端地址、
+用户名与口令。
 
-### 3. 生成载荷
+### 4. 生成载荷
 
 在客户端「载荷生成」面板选择格式，填写回连地址与端口，点击生成。
 产物默认输出到 `build/payload/`。
 
-### 4. 建立会话
+### 5. 建立会话
 
 在目标机执行生成的可执行文件，会话将出现在「会话」面板，选中后即可在下方终端下发命令。
 
