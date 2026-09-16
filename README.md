@@ -1,4 +1,6 @@
-# Rainmaker C2
+<div align="center">
+  <img src="docs/assets/logo.png" alt="Rainmaker C2" width="540">
+</div>
 
 自研命令与控制框架。植入体、服务端、客户端三层全部自行实现，不依赖任何第三方 C2 平台。
 
@@ -10,6 +12,7 @@ HMAC-SHA256 完整性校验；承载层支持 HTTP / HTTPS / TCP / SMB / DNS / E
 
 ## 目录
 
+- [界面预览](#界面预览)
 - [核心特性](#核心特性)
 - [系统组成](#系统组成)
 - [通信协议](#通信协议)
@@ -21,6 +24,29 @@ HMAC-SHA256 完整性校验；承载层支持 HTTP / HTTPS / TCP / SMB / DNS / E
 - [仓库结构](#仓库结构)
 - [系统要求](#系统要求)
 - [安全说明](#安全说明)
+
+---
+
+## 界面预览
+
+**启动登录** — 先认证，通过后才进入控制台。
+
+<img src="docs/assets/shot-login.png" alt="登录界面" width="380">
+
+**会话管理** — 上方是会话列表，下方是终端；选中会话即可下发命令。
+
+<img src="docs/assets/shot-main.png" alt="会话管理">
+
+**文件浏览** — 远程目录导航、上传与下载，带本地目录缓存。
+
+<img src="docs/assets/shot-files.png" alt="文件浏览">
+
+**载荷生成** — 选择格式与回连参数，服务端完成编译与打包。
+
+<img src="docs/assets/shot-payload.png" alt="载荷生成">
+
+> 以上截图中的人机数据均为隔离演示环境生成（主机 `demo-node`、进程 `beacon_demo`、
+> 回连地址 `127.0.0.1`）。
 
 ---
 
@@ -302,7 +328,11 @@ c2/                   早期 Python 服务端实现
 aggressor/            Aggressor 插件
 profiles/             Malleable C2 profile
 tools/                构建与生成脚本
+  gen_icon.ps1        生成应用图标 (多尺寸 ICO)
+  gen_logo.ps1        生成 README 用 logo
+  build_server.ps1    服务端跨平台构建
 docs/                 协议规范
+  assets/             README 配图
 ```
 
 ---
