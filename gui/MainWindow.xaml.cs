@@ -4162,6 +4162,48 @@ namespace CsdevGui
                 string log = root.Str("log");
                 string err = root.Str("error");
 
+                // 产物随响应回传 (data_b64) —— 落到**本机**。
+                //
+                // 为什么必须这样: 服务端常常跑在远程 VPS 上, 它写自己的磁盘等于产物留在
+                // 那台机器。更糟的是客户端填的 Windows 路径到了 Linux 服务端会被当成
+                // **单个文件名** (反斜杠不是 Linux 的分隔符), 产物变成一个名字里带反斜杠
+                // 的文件躺在服务端的工作目录里 —— 报成功, 但谁也找不到。
+                //
+                // 所以"输出路径"从今天起是**客户端的保存路径**, 服务端只负责生成与回传。
+                if (ok)
+                {
+                    string b64 = root.Str("data_b64");
+                    if (!string.IsNullOrEmpty(b64))
+                    {
+                        try
+                        {
+                            byte[] blob = Convert.FromBase64String(b64);
+                            string dest = outFile;
+                            if (string.IsNullOrEmpty(dest))
+                            {
+                                string fn = root.Str("file");
+                                if (string.IsNullOrEmpty(fn)) fn = fmt + "_payload.bin";
+                                dest = Path.Combine(_devRoot, "build", "payload", fn);
+                            }
+                            string dir = Path.GetDirectoryName(dest);
+                            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                            File.WriteAllBytes(dest, blob);
+
+                            string sha = root.Str("sha256");
+                            GenLine("");
+                            GenLine("[+] 已保存到本机: " + dest);
+                            GenLine("    " + blob.Length + " 字节" + (sha.Length >= 16 ? ", sha256 " + sha.Substring(0, 16) : ""));
+                            SetStatus("载荷已生成并保存: " + Path.GetFileName(dest));
+                        }
+                        catch (Exception ex)
+                        {
+                            // 保存失败只报错, 不改判 ok —— 服务端那边确实生成成功了
+                            GenLine("[!] 保存到本机失败: " + ex.Message);
+                            SetStatus("载荷已生成, 但保存到本机失败");
+                        }
+                    }
+                }
+
                 // 口令明文掩码后再逐行显示: [口令门控] 已启用那两行照原样保留, 只把口令换掉
                 string shown = MaskPwd(log, password);
                 if (!string.IsNullOrEmpty(shown))
