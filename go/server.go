@@ -697,6 +697,7 @@ var consoleRoutes = []consoleRoute{
 	}},
 	{"/api/payload/formats", handlePayloadFormats},
 	{"/api/payload/build", handlePayloadBuild},
+	{"/api/pubkey", handlePubkey},
 	{"/api/killall", handleKillAll},
 	{"/api/targets", handleTargets},
 	{"/api/targets/csv", handleTargetsCSV},

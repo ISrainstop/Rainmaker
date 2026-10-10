@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"csdev/proto"
 )
 
 // extOf 各格式的默认扩展名 (仅在调用方没给输出路径时用来拼文件名)
@@ -85,6 +87,12 @@ func buildPayloadNative(format, host string, port int, ssl bool, uri string,
 		SSL:       ssl,
 		TokenSalt: salt,
 		TokenHash: hash,
+	}
+
+	// 运行期公钥: 从服务端私钥现算, 保证载荷与 data/csdev.key 永远同源。
+	// 不再依赖编译期 pubkey.h —— 这是根治"checkin RSA 解密失败"的关键。
+	if listenerPriv != nil {
+		cfg.Pubkey = proto.PublicKeyBlob(&listenerPriv.PublicKey)
 	}
 
 	blob, err := BuildPayloadNative(format, cfg)

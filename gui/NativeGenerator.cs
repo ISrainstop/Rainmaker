@@ -28,7 +28,7 @@ namespace CsdevGui
         private static readonly byte[] CfgMagic = { 0x52, 0x47, 0x43, 0x32, 0xA5, 0x5A, 0xC3, 0x3C };
 
         // 配置槽布局 (镜像 go/gen_native.go 的常量表)
-        private const int CfgSlotSize = 512;
+        private const int CfgSlotSize = 1024;
         private const int offVersion = 8;
         private const int offPort = 12;
         private const int offSleep = 16;
@@ -49,9 +49,11 @@ namespace CsdevGui
         private const int lenIDHeader = 48;
         private const int offIDValue = 400;
         private const int lenIDValue = 80;
-        private const int offReserved = 480;
-        private const int lenReserved = 32;
-        private const int CfgVersion = 1;
+        private const int offPubkey = 480;
+        private const int lenPubkey = 276;
+        private const int offReserved = 756;
+        private const int lenReserved = 268;
+        private const int CfgVersion = 2;
         private const uint FlagSSL = 1u << 0;
 
         private static readonly string[] NativeFormatIds =
@@ -109,7 +111,8 @@ namespace CsdevGui
         /// 参数语义与 GUI「载荷生成」页一致; password 非空时启用启动口令门控。
         /// </summary>
         public static Result Generate(string format, string host, int port, bool ssl,
-                                      string uri, int sleep, int jitter, string xform, string password)
+                                      string uri, int sleep, int jitter, string xform, string password,
+                                      byte[] pubkey)
         {
             try
             {
@@ -132,7 +135,7 @@ namespace CsdevGui
                     return new Result { Error = "模板里找不到配置槽定位标记 (模板可能不是由 tools/build_templates.ps1 生成的)" };
                 }
 
-                byte[] blob = PatchConfig(tmpl, slot, host, port, ssl, uri, sleep, jitter, xform, salt, hash);
+                byte[] blob = PatchConfig(tmpl, slot, host, port, ssl, uri, sleep, jitter, xform, salt, hash, pubkey);
 
                 var log = new StringBuilder();
                 log.AppendLine("[*] 客户端内置生成器 (零外部工具链, 未经过服务端)");
@@ -288,7 +291,7 @@ namespace CsdevGui
 
         private static byte[] PatchConfig(byte[] tmpl, int slot, string host, int port, bool ssl,
                                           string uri, int sleep, int jitter, string xform,
-                                          string salt, string hash)
+                                          string salt, string hash, byte[] pubkey)
         {
             if (string.IsNullOrEmpty(host) || host.Length > 100 ||
                 host.IndexOfAny(new[] { '\0', ' ', '\t', '\r', '\n' }) >= 0)
@@ -328,6 +331,18 @@ namespace CsdevGui
             PutStr(out_, slot + offTokenHash, lenTokenHash, hash, "口令摘要");
             PutStr(out_, slot + offIDHeader, lenIDHeader, "", "metadata 头");
             PutStr(out_, slot + offIDValue, lenIDValue, "", "metadata 值");
+
+            // 运行期公钥: 覆写进槽位, 让载荷与服务端私钥永远同源。
+            if (pubkey != null && pubkey.Length > 0)
+            {
+                if (pubkey.Length > lenPubkey)
+                {
+                    throw new InvalidOperationException("公钥 blob 过长: " + pubkey.Length + " 字节, 上限 " + lenPubkey);
+                }
+                for (int i = 0; i < lenPubkey; i++) out_[slot + offPubkey + i] = 0;
+                Array.Copy(pubkey, 0, out_, slot + offPubkey, pubkey.Length);
+            }
+
             for (int i = slot + offReserved; i < slot + CfgSlotSize; i++) out_[i] = 0;
 
             return out_;

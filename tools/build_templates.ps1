@@ -144,7 +144,7 @@ foreach ($t in $targets) {
         Write-Host ("    [!] 配置槽校验失败: 标记命中 {0} 次 (必须恰好 1 次)" -f $offsets.Count) -ForegroundColor Red
         continue
     }
-    if (($bytes.Length - $offsets[0]) -lt 512) {
+    if (($bytes.Length - $offsets[0]) -lt 1024) {
         Write-Host "    [!] 配置槽校验失败: 槽位超出文件尾" -ForegroundColor Red
         continue
     }

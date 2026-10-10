@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"csdev/proto"
 )
 
 // ---------------------------------------------------------------- 路径
@@ -314,6 +316,24 @@ var payloadFormats = []payloadFormat{
 
 func handlePayloadFormats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"ok": true, "formats": payloadFormats})
+}
+
+// handlePubkey GET /api/pubkey -- 返回服务端当前公钥 (CryptoAPI PUBLICKEYBLOB, base64)。
+//
+// 客户端本地生成载荷时拉取它并覆写进载荷配置槽, 保证载荷与服务端私钥同源 ——
+// 这是根治"checkin RSA 解密失败"的关键 (不再依赖仓库里那根可能漂移的 pubkey.h)。
+func handlePubkey(w http.ResponseWriter, r *http.Request) {
+	if listenerPriv == nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "服务端密钥尚未就绪"})
+		return
+	}
+	blob := proto.PublicKeyBlob(&listenerPriv.PublicKey)
+	writeJSON(w, map[string]interface{}{
+		"ok":          true,
+		"blob_b64":    base64.StdEncoding.EncodeToString(blob),
+		"blob_len":    len(blob),
+		"fingerprint": pubkeyFingerprint(blob),
+	})
 }
 
 func handlePayloadBuild(w http.ResponseWriter, r *http.Request) {

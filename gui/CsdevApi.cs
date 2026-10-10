@@ -454,6 +454,17 @@ namespace CsdevGui
             return PostJsonAsync("/api/payload/build", req, true);
         }
 
+        /// <summary>
+        /// 拉取服务端当前公钥 (GET /api/pubkey)。
+        ///
+        /// 客户端本地生成载荷时用它覆写进载荷配置槽, 保证载荷与服务端私钥同源 ——
+        /// 不再依赖仓库里那根可能漂移的 pubkey.h。
+        /// </summary>
+        public Task<JsonDocument> GetPubkeyAsync()
+        {
+            return GetJsonAsync("/api/pubkey", _http);
+        }
+
         /// <summary>登录取令牌 (POST /api/login {user, pass})。</summary>
         public async Task<string> LoginAsync(string user, string pass)
         {
