@@ -229,6 +229,19 @@ func (st *V2State) lookupNum(id uint32) *V2Session {
 	return st.byNum[id]
 }
 
+// remove 删除一个会话记录 (仅清理服务端状态, 不向目标下发任何命令)。
+func (st *V2State) remove(id string) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	s, ok := st.byID[id]
+	if !ok {
+		return false
+	}
+	delete(st.byID, id)
+	delete(st.byNum, s.Num)
+	return true
+}
+
 func (st *V2State) list() []*V2Session {
 	st.mu.RLock()
 	defer st.mu.RUnlock()

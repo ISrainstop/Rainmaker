@@ -83,15 +83,7 @@ func storeTargets() []Target {
 }
 
 func targetDelete(id uint64) bool {
-	stStore.mu.Lock()
-	defer stStore.mu.Unlock()
-	for i := range stStore.targets {
-		if stStore.targets[i].ID == id {
-			stStore.targets = append(stStore.targets[:i], stStore.targets[i+1:]...)
-			return true
-		}
-	}
-	return false
+	return storeDeleteRecord(KindTarget, id)
 }
 
 // ---------------------------------------------------------------- API

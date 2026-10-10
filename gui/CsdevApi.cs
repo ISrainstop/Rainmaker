@@ -400,6 +400,44 @@ namespace CsdevGui
             return PostJsonAsync("/api/targets", body);
         }
 
+        // ---------------------------------------------------------------- 删除/清空
+
+        /// <summary>从列表删除会话记录 (仅清理服务端状态, 不向目标下发命令)。</summary>
+        public Task<JsonDocument> RemoveSessionAsync(string sid)
+        {
+            return PostJsonAsync("/api/session/remove", new { sid });
+        }
+
+        /// <summary>删除一条凭据记录。</summary>
+        public Task<JsonDocument> DeleteCredentialAsync(long id)
+        {
+            return PostJsonAsync("/api/credentials/delete", new { id });
+        }
+
+        /// <summary>删除一条下载记录 + 落盘文件。</summary>
+        public Task<JsonDocument> DeleteDownloadAsync(long id)
+        {
+            return PostJsonAsync("/api/downloads/delete", new { id });
+        }
+
+        /// <summary>删除一条截屏记录 + 落盘文件。</summary>
+        public Task<JsonDocument> DeleteScreenshotAsync(long id)
+        {
+            return PostJsonAsync("/api/screenshots/delete", new { id });
+        }
+
+        /// <summary>清空全部键盘记录。</summary>
+        public Task<JsonDocument> ClearKeylogsAsync()
+        {
+            return PostJsonAsync("/api/keylogs/clear", new { });
+        }
+
+        /// <summary>清空已结束的作业 (保留 running)。</summary>
+        public Task<JsonDocument> ClearJobsAsync()
+        {
+            return PostJsonAsync("/api/jobs/clear", new { });
+        }
+
         /// <summary>导出目标 CSV: GET /api/targets/csv (服务端带 UTF-8 BOM, 走字节流不解析 JSON)。</summary>
         public Task<byte[]> GetTargetsCsvAsync()
         {

