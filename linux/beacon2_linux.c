@@ -40,6 +40,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/utsname.h>
+#include <poll.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -697,11 +698,44 @@ static unsigned int run_shell(const char *cmd, unsigned char *out, unsigned int 
     close(pfd[1]);
     setpgid(pid, pid);      /* 与子进程竞争设置, 失败无所谓 */
 
-    while (total < cap) {
-        ssize_t n = read(pfd[0], out + total, cap - total);
-        if (n > 0) { total += (unsigned int)n; continue; }
-        if (n < 0 && errno == EINTR) continue;
-        break;
+    /* 有界读取: poll + 10 秒上限, 超时整组清理。
+     *
+     * 原实现是裸 read 死循环 —— 命令长驻 (ping / tail -f / sleep / 一个不主动
+     * 关 stdout 的子进程) 时管道永远不 EOF, read 永远阻塞, 植入体就死在这里、
+     * 心跳停摆。这里改成: 200ms 轮询一次, 子进程退出即正常结束, 10 秒超时则
+     * 杀掉整个进程组强收场 —— 任何一条 shell 命令都堵不死通信。 */
+    {
+        int t0 = (int)time(NULL);
+        while (total < cap) {
+            struct pollfd pfd_s;
+            int pr;
+
+            pfd_s.fd = pfd[0];
+            pfd_s.events = POLLIN;
+            pfd_s.revents = 0;
+            pr = poll(&pfd_s, 1, 200);
+            if (pr < 0 && errno == EINTR) continue;
+            if (pr < 0) break;
+
+            if (pfd_s.revents & (POLLIN | POLLHUP | POLLERR)) {
+                ssize_t n = read(pfd[0], out + total, cap - total);
+                if (n > 0) { total += (unsigned int)n; continue; }
+                break;   /* EOF 或错误 */
+            }
+
+            /* poll 超时: 子进程是否已退出 */
+            {
+                int st;
+                pid_t r = waitpid(pid, &st, WNOHANG);
+                if (r == pid) break;                /* 正常结束 */
+                if ((int)time(NULL) - t0 >= 10) {   /* 10s 上限, 整组清理 */
+                    kill(-pid, SIGKILL);
+                    kill(pid, SIGKILL);
+                    waitpid(pid, &st, 0);
+                    break;
+                }
+            }
+        }
     }
     if (total >= cap) {
         /* 可能还有数据 -> 标记截断并尽快收摊 */
