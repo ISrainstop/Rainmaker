@@ -37,8 +37,15 @@ $rsa = [System.Security.Cryptography.RSA]::Create($Bits)
 $p   = $rsa.ExportParameters($true)
 
 # ---------------------------------------------------------------- PEM 落盘
-[System.IO.File]::WriteAllText($KeyOut, $rsa.ExportPkcs8PrivateKeyPem())
-[System.IO.File]::WriteAllText($PubOut, $rsa.ExportSubjectPublicKeyInfoPem())
+# 兼容性: ExportPkcs8PrivateKeyPem / ExportSubjectPublicKeyInfoPem 是 .NET 5+
+# 才有的一步到位 API; Windows PowerShell 5.1(.NET Framework 4.x) 只有返回
+# byte[] 的 ExportPkcs8PrivateKey / ExportSubjectPublicKeyInfo, 这里手拼 PEM。
+$privDer = $rsa.ExportPkcs8PrivateKey()
+$pubDer  = $rsa.ExportSubjectPublicKeyInfo()
+[System.IO.File]::WriteAllText($KeyOut,
+    "-----BEGIN PRIVATE KEY-----`r`n" + [Convert]::ToBase64String($privDer, 'InsertLineBreaks') + "`r`n-----END PRIVATE KEY-----`r`n")
+[System.IO.File]::WriteAllText($PubOut,
+    "-----BEGIN PUBLIC KEY-----`r`n" + [Convert]::ToBase64String($pubDer, 'InsertLineBreaks') + "`r`n-----END PUBLIC KEY-----`r`n")
 
 # ---------------------------------------------- CryptoAPI PUBLICKEYBLOB
 # BLOBHEADER(8) + RSAPUBKEY(12) + modulus(256, 小端)
