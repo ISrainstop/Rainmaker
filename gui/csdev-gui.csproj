@@ -1,5 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- 客户端内置生成器: 把服务端 go/templates 的加密载荷模板作为资源嵌入。
+       逻辑名用 csdev.templates.* 前缀, 与 NativeGenerator.cs 的读取约定一致。
+       模板与服务端共用, 保证两端产出的原生格式载荷语义一致。 -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\go\templates\key.bin" LogicalName="csdev.templates.key.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-exe.bin" LogicalName="csdev.templates.win2-exe.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-console.bin" LogicalName="csdev.templates.win2-console.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-svc.bin" LogicalName="csdev.templates.win2-svc.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-dll.bin" LogicalName="csdev.templates.win2-dll.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-raw.bin" LogicalName="csdev.templates.win2-raw.bin" />
+    <EmbeddedResource Include="..\go\templates\win2-tcp.bin" LogicalName="csdev.templates.win2-tcp.bin" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net6.0-windows</TargetFramework>

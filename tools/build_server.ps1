@@ -1,4 +1,4 @@
-# Rainmaker C2 :: 服务端跨平台构建
+﻿# Rainmaker C2 :: 服务端跨平台构建
 #
 # 一次编出 Windows / Linux / macOS 三个平台的服务端。
 # 服务端本身零第三方依赖 (纯 Go 标准库 + golang.org/x/text), 所以交叉编译不需要

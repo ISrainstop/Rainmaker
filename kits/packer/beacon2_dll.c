@@ -47,3 +47,13 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
 {
     return _DllMainCRTStartup(inst, reason, reserved);
 }
+
+/* 现代 MinGW-w64 (gcc 16.x MSVCRT) 的 libmingwex 会无条件引用 atexit,
+ * 而 -nostartfiles 跳过了提供 atexit 的 CRT 启动对象, 于是 DLL 链接报
+ * "undefined reference to `atexit'"。植入体 DLL 不需要 atexit 做退出清理,
+ * 给一个空实现即可满足链接, 不改变任何运行时行为。 */
+int atexit(void (*func)(void))
+{
+    (void)func;
+    return 0;
+}

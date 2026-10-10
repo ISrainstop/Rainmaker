@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
   Rainmaker C2 :: SOCKS5 代理 + 反向端口转发 端到端验证

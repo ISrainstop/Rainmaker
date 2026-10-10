@@ -1,4 +1,4 @@
-# Rainmaker C2 :: 生成 README 用的 logo (PNG, 高分辨率)
+﻿# Rainmaker C2 :: 生成 README 用的 logo (PNG, 高分辨率)
 #
 # 产出两份:
 #   docs\assets\logo.png       横向组合标 (图标块 + 手写体字标), 用于 README 顶部

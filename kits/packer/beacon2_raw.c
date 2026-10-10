@@ -23,3 +23,12 @@ void beacon_entry(void)
     int rc = beacon_run();
     ExitProcess((UINT)rc);
 }
+
+/* 现代 MinGW-w64 (gcc 16.x MSVCRT) 的 libmingwex 无条件引用 atexit, 而
+ * -nostartfiles 跳过提供 atexit 的 CRT 启动对象 -> "undefined reference"。
+ * shellcode 入口不依赖 atexit, 空实现即可满足链接。 */
+int atexit(void (*func)(void))
+{
+    (void)func;
+    return 0;
+}

