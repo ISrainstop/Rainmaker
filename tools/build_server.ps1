@@ -65,6 +65,6 @@ finally {
 
 Write-Host ""
 Write-Host "[+] 构建完成, 产物在 $OutDir" -ForegroundColor Green
-Write-Host "    注意: 载荷生成当前仍依赖 PowerShell 生成器 (tools\gen_payload*.ps1)。" -ForegroundColor Yellow
-Write-Host "    在 Linux/macOS 上没有 pwsh 时, 服务端本身可正常运行 (会话/命令/报告/脚本引擎都可用)," -ForegroundColor Yellow
-Write-Host "    但 /api/payload/build 会失败 —— 这是下一步要解决的事。" -ForegroundColor Yellow
+Write-Host "    注意: 原生格式 (win2-exe/console/svc/dll/raw/tcp) 由内置模板生成器产出, 无需 PowerShell / gcc。" -ForegroundColor Yellow
+Write-Host "    脚本类格式 (win2-ps1/vba/vbs/cs/hta) 在服务端侧仍走 PowerShell 生成器 (需 pwsh + gcc)。" -ForegroundColor Yellow
+Write-Host "    客户端 GUI 已内置生成器: 原生 + 脚本类格式都能在客户端本地零工具链生成。" -ForegroundColor Yellow

