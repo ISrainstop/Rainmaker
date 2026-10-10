@@ -252,21 +252,18 @@ func (st *V2State) getOrCreate(addr string, info *proto.CheckinInfo) *V2Session 
 		return uint32(v)
 	}
 
-	ident := get(0, "?") + "|" + get(1, "?")
-
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
-	// 同一台机器重连: 复用会话号, 但换新密钥 (旧密钥已随进程销毁)
-	for _, s := range st.byID {
-		if s.Host+"|"+s.User == ident {
-			s.AESKey = info.AESKey
-			s.HMACKey = info.HMACKey
-			s.Last = time.Now().Unix()
-			s.LastAddr(addr)
-			return s
-		}
-	}
+	// 每次 checkin 都新建会话, 不做 host|user 去重。
+	//
+	// 之前这里按 host|user 复用会话号, 意图是"同一台机器重连时沿用原会话"。但这有两个
+	// 致命问题:
+	//   1) 同一 payload 并发跑多份时, 各实例 host|user 相同 -> 互相覆盖 AES/HMAC 密钥,
+	//      表现就是"HMAC 校验失败", 且两侧 seq 互相打架 -> "seq 回退"。
+	//   2) 即便真的重启重连, 新进程 seq 从 0 起, 而会话 RXSeq 还停在旧值 -> 同样 seq 回退。
+	// 每个 checkin 都携带全新的随机 (aes_key||hmac_key), 本质就是一个新会话, 直接给新号即可。
+	// (若将来需要"重启沿用旧号", 应引入 per-process boot_id + 会话超时判定, 而不是靠 host|user。)
 
 	st.seq++
 	sess := &V2Session{
